@@ -27,7 +27,10 @@ static BLECharacteristic* txChar = nullptr;
 static BLECharacteristic* rxChar = nullptr;
 static volatile bool      connected = false;
 static volatile bool      secure = false;
+static volatile bool      securityRequired = true;
 static volatile uint32_t  passkey = 0;
+static volatile uint32_t  passkeySinceMs = 0;
+static volatile uint32_t  configuredPasskey = 123456;
 static volatile uint16_t  mtu = 23;
 
 static void rxPush(const uint8_t* p, size_t n) {
@@ -49,50 +52,58 @@ class RxCallbacks : public BLECharacteristicCallbacks {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* s) override {
     connected = true;
-    Serial.println("[ble] connected");
+    secure = !securityRequired;
+    passkey = 0;
+    passkeySinceMs = 0;
   }
   void onDisconnect(BLEServer* s) override {
     connected = false;
-    secure = false;
+    secure = !securityRequired;
     passkey = 0;
+    passkeySinceMs = 0;
     mtu = 23;
-    Serial.println("[ble] disconnected");
     // Restart advertising so the next client can find us.
     BLEDevice::startAdvertising();
   }
   void onMtuChanged(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
     mtu = param->mtu.mtu;
-    Serial.printf("[ble] mtu=%u\n", mtu);
   }
 };
 
-// LE Secure Connections, passkey-entry: we are DisplayOnly, the central
-// is KeyboardOnly. The stack picks a random 6-digit passkey, calls
-// onPassKeyNotify here, and the user types it on the desktop. main.cpp
-// polls blePasskey() to render it.
+// LE Secure Connections, passkey-entry: we use a static six-digit PIN so the
+// firmware can show it before the OS dialog appears. If the stack still emits
+// an active passkey notification, main.cpp renders that as a pairing modal.
 class SecCallbacks : public BLESecurityCallbacks {
   uint32_t onPassKeyRequest() override { return 0; }
   bool onConfirmPIN(uint32_t) override { return false; }
   bool onSecurityRequest() override { return true; }
   void onPassKeyNotify(uint32_t pk) override {
     passkey = pk;
-    Serial.printf("[ble] passkey %06lu\n", (unsigned long)pk);
+    passkeySinceMs = millis();
   }
   void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) override {
     passkey = 0;
-    secure = cmpl.success;
-    Serial.printf("[ble] auth %s\n", cmpl.success ? "ok" : "FAIL");
+    passkeySinceMs = 0;
+    secure = securityRequired ? cmpl.success : false;
     if (!cmpl.success && server) server->disconnect(server->getConnId());
   }
 };
 
-void bleInit(const char* deviceName) {
+void bleInit(const char* deviceName, bool requireSecurity, uint32_t staticPasskey) {
+  securityRequired = requireSecurity;
+  configuredPasskey = staticPasskey % 1000000;
+  if (configuredPasskey < 100000) configuredPasskey += 100000;
+  secure = !securityRequired;
+  passkey = 0;
+
   BLEDevice::init(deviceName);
   // Request the biggest MTU we can get. macOS negotiates to 185 typically.
   BLEDevice::setMTU(517);
 
-  BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
-  BLEDevice::setSecurityCallbacks(new SecCallbacks());
+  if (securityRequired) {
+    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
+    BLEDevice::setSecurityCallbacks(new SecCallbacks());
+  }
 
   server = BLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
@@ -103,26 +114,33 @@ void bleInit(const char* deviceName) {
     NUS_TX_UUID,
     BLECharacteristic::PROPERTY_NOTIFY
   );
-  txChar->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED);
+  txChar->setAccessPermissions(securityRequired ? ESP_GATT_PERM_READ_ENCRYPTED
+                                                : ESP_GATT_PERM_READ);
   BLE2902* cccd = new BLE2902();
-  cccd->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
+  cccd->setAccessPermissions(securityRequired
+    ? (ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED)
+    : (ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE));
   txChar->addDescriptor(cccd);
 
   rxChar = svc->createCharacteristic(
     NUS_RX_UUID,
     BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
   );
-  rxChar->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
+  rxChar->setAccessPermissions(securityRequired ? ESP_GATT_PERM_WRITE_ENCRYPTED
+                                                : ESP_GATT_PERM_WRITE);
   rxChar->setCallbacks(new RxCallbacks());
 
   svc->start();
 
-  BLESecurity* sec = new BLESecurity();
-  sec->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
-  sec->setCapability(ESP_IO_CAP_OUT);
-  sec->setKeySize(16);
-  sec->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
-  sec->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  if (securityRequired) {
+    BLESecurity* sec = new BLESecurity();
+    sec->setStaticPIN(configuredPasskey);
+    sec->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
+    sec->setCapability(ESP_IO_CAP_OUT);
+    sec->setKeySize(16);
+    sec->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    sec->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  }
 
   BLEAdvertising* adv = BLEDevice::getAdvertising();
   adv->addServiceUUID(NUS_SERVICE_UUID);
@@ -130,12 +148,18 @@ void bleInit(const char* deviceName) {
   adv->setMinPreferred(0x06);   // iOS-friendly connection interval
   adv->setMaxPreferred(0x12);
   BLEDevice::startAdvertising();
-  Serial.printf("[ble] advertising as '%s'\n", deviceName);
 }
 
 bool bleConnected() { return connected; }
-bool bleSecure()    { return secure; }
-uint32_t blePasskey() { return passkey; }
+bool bleSecure()    { return securityRequired && secure; }
+bool bleSecurityRequired() { return securityRequired; }
+uint32_t blePasskey() {
+  if (passkey && passkeySinceMs && millis() - passkeySinceMs > 60000) {
+    passkey = 0;
+    passkeySinceMs = 0;
+  }
+  return passkey;
+}
 
 void bleClearBonds() {
   int n = esp_ble_get_bond_device_num();
@@ -145,7 +169,6 @@ void bleClearBonds() {
   esp_ble_get_bond_device_list(&n, list);
   for (int i = 0; i < n; i++) esp_ble_remove_bond_device(list[i].bd_addr);
   free(list);
-  Serial.printf("[ble] cleared %d bond(s)\n", n);
 }
 
 size_t bleAvailable() {

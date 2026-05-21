@@ -1,5 +1,5 @@
 #include "character.h"
-#include <M5StickCPlus.h>
+#include "hal.h"
 #include <LittleFS.h>
 #include <AnimatedGIF.h>
 #include <ArduinoJson.h>
@@ -37,10 +37,18 @@ static uint8_t curState = 0xFF;
 static AnimatedGIF gif;
 static File        gifFile;
 static int         gifX = 0, gifY = 0, gifW = 0, gifH = 0;
-// Peek mode pins the GIF bottom to the info-panel top (y=70) so the pet
-// sits on the panel edge regardless of canvas height. Home mode centers
-// in the upper 140px. No padding assumed in the source art.
-static const int   PEEK_TOP = 70;
+// Peek mode pins the GIF bottom to the info-panel top so the pet sits on
+// the panel edge regardless of canvas height. Home mode centers in the
+// upper portion of the sprite. No padding assumed in the source art.
+// Landscape packs both zones tighter so info/pet pages have enough room
+// for their content under the pet strip.
+#ifdef CARDPUTER_ADV
+static const int   PEEK_TOP             = 40;
+static const int   CHARACTER_HOME_ZONE  = 80;
+#else
+static const int   PEEK_TOP             = 70;
+static const int   CHARACTER_HOME_ZONE  = 140;
+#endif
 static bool        peekMode = false;
 // Draw target — defaults to the sprite; characterRenderTo() retargets to
 // M5.Lcd for the landscape clock (both inherit TFT_eSPI).
@@ -51,7 +59,7 @@ static void gifPlace() {
   int outW = peekMode ? gifW / 2 : gifW;
   int outH = peekMode ? gifH / 2 : gifH;
   gifX = (spr.width() - outW) / 2;
-  gifY = peekMode ? (PEEK_TOP - outH) / 2 : (140 - outH) / 2;
+  gifY = peekMode ? (PEEK_TOP - outH) / 2 : (CHARACTER_HOME_ZONE - outH) / 2;
 }
 static uint32_t    nextFrameAt = 0;
 static uint32_t    animPauseUntil = 0;
@@ -138,10 +146,11 @@ static void gifDrawCb(GIFDRAW* d) {
 // --- Public -------------------------------------------------------------
 
 bool characterInit(const char* name) {
-  if (!LittleFS.begin(false)) {
-    // begin() fails if already mounted — that's fine on reload
+  if (!LittleFS.begin(true)) {
+    // begin() fails if already mounted - that's fine on reload. The true
+    // flag formats only an uninitialized partition, which lets fresh flashes
+    // receive GIF character packs without a manual factory reset first.
     if (!LittleFS.open("/")) {
-      Serial.println("[char] LittleFS mount failed");
       return false;
     }
   }
@@ -165,7 +174,7 @@ bool characterInit(const char* name) {
       }
       d.close();
     }
-    if (!name) { Serial.println("[char] no characters installed"); return false; }
+    if (!name) return false;
   }
 
   snprintf(basePath, sizeof(basePath), "/characters/%s", name);
@@ -174,7 +183,6 @@ bool characterInit(const char* name) {
 
   File mf = LittleFS.open(mpath, "r");
   if (!mf) {
-    Serial.printf("[char] manifest not found: %s\n", mpath);
     return false;
   }
 
@@ -182,7 +190,6 @@ bool characterInit(const char* name) {
   DeserializationError err = deserializeJson(doc, mf);
   mf.close();
   if (err) {
-    Serial.printf("[char] manifest parse: %s\n", err.c_str());
     return false;
   }
 
@@ -216,7 +223,6 @@ bool characterInit(const char* name) {
       }
     }
     loaded = true;
-    Serial.printf("[char] loaded '%s' (text mode, %d states)\n", name, N_STATES);
     return true;
   }
 
@@ -240,7 +246,6 @@ bool characterInit(const char* name) {
 
   gif.begin(LITTLE_ENDIAN_PIXELS);
   loaded = true;
-  Serial.printf("[char] loaded '%s' from %s\n", (const char*)doc["name"], basePath);
   return true;
 }
 
@@ -308,7 +313,6 @@ void characterSetState(uint8_t s) {
   curState = s;
 
   if (stateCount[s] == 0) {
-    Serial.printf("[char] no gif for state %d\n", s);
     return;
   }
 
@@ -323,10 +327,6 @@ void characterSetState(uint8_t s) {
     spr.fillSprite(pal.bg);   // bias upward, leave room for HUD
     nextFrameAt = 0;
     variantStartedMs = millis();
-    Serial.printf("[char] %s: %dx%d @ (%d,%d) heap=%u\n",
-      gifPaths[idx], gifW, gifH, gifX, gifY, ESP.getFreeHeap());
-  } else {
-    Serial.printf("[char] open failed: %s (err %d)\n", full, gif.getLastError());
   }
 }
 

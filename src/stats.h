@@ -185,15 +185,15 @@ struct Settings {
   uint8_t clockRot;  // 0=auto 1=portrait 2=landscape
 };
 
-static Settings _settings = { true, true, false, true, true, 0 };
+static Settings _settings = { false, true, false, true, true, 0 };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
-  _settings.sound = _prefs.getBool("s_snd", true);
+  _settings.sound = _prefs.getBool("s_snd", false);
   _settings.bt    = _prefs.getBool("s_bt",  true);
   _settings.wifi  = _prefs.getBool("s_wifi",false);
   _settings.led   = _prefs.getBool("s_led", true);
-  _settings.hud      = _prefs.getBool("s_hud", true);
+  _settings.hud = _prefs.getBool("s_hud", true);
   _settings.clockRot = _prefs.getUChar("s_crot", 0);
   if (_settings.clockRot > 2) _settings.clockRot = 0;
   _prefs.end();

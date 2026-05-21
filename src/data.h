@@ -81,8 +81,8 @@ static void _applyJson(const char* line, TamaState* out) {
     RTC_TimeTypeDef tm = { (uint8_t)lt.tm_hour, (uint8_t)lt.tm_min, (uint8_t)lt.tm_sec };
     RTC_DateTypeDef dt = { (uint8_t)lt.tm_wday, (uint8_t)(lt.tm_mon + 1),
                            (uint8_t)lt.tm_mday, (uint16_t)(lt.tm_year + 1900) };
-    M5.Rtc.SetTime(&tm);
-    M5.Rtc.SetDate(&dt);
+    halRtcSetTime(&tm);
+    halRtcSetDate(&dt);
     extern uint32_t _clkLastRead;
     _clkLastRead = 0;   // force re-read so _clkDt and _rtcValid agree
     _rtcValid = true;
@@ -130,8 +130,8 @@ template<size_t N>
 struct _LineBuf {
   char buf[N];
   uint16_t len = 0;
-  void feed(Stream& s, TamaState* out) {
-    while (s.available()) {
+  void feed(Stream& s, TamaState* out, uint16_t budget = 256) {
+    while (s.available() && budget--) {
       char c = s.read();
       if (c == '\n' || c == '\r') {
         if (len > 0) { buf[len]=0; if (buf[0]=='{') _applyJson(buf, out); len=0; }
@@ -159,7 +159,9 @@ inline void dataPoll(TamaState* out) {
 
   _usbLine.feed(Serial, out);
   // BLE ring buffer is drained manually since it's not a Stream.
-  while (bleAvailable()) {
+  uint16_t bleBudget = 768;
+  uint32_t bleStart = millis();
+  while (bleAvailable() && bleBudget--) {
     int c = bleRead();
     if (c < 0) break;
     _lastBtByteMs = millis();
@@ -172,6 +174,7 @@ inline void dataPoll(TamaState* out) {
     } else if (_btLine.len < sizeof(_btLine.buf) - 1) {
       _btLine.buf[_btLine.len++] = (char)c;
     }
+    if (millis() - bleStart > 8) break;
   }
 
   out->connected = dataConnected();

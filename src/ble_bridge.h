@@ -14,13 +14,16 @@
 // same _applyJson path that USB/BT-Classic use. Replies (acks, status
 // snapshots) are written via bleWrite() and chunked to the negotiated MTU.
 
-void bleInit(const char* deviceName);
+void bleInit(const char* deviceName, bool requireSecurity = true, uint32_t staticPasskey = 123456);
 bool bleConnected();
 // True once LE Secure Connections bonding has completed for the current
 // link. The NUS characteristics are encrypted-only, so in practice this
 // is always true by the time any data flows; exposed so the status ack
 // can report it to the desktop.
 bool bleSecure();
+// True when this boot requires BLE encryption/passkey pairing. False means
+// the NUS characteristics are open and Claude can connect without a passkey.
+bool bleSecurityRequired();
 // Non-zero while a 6-digit pairing passkey should be on screen. main.cpp
 // renders it; cleared automatically on auth complete or disconnect.
 uint32_t blePasskey();
