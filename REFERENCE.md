@@ -93,6 +93,16 @@ UTF-8 bytes, not character count).
 }
 ```
 
+This fork also recognizes an optional text marker inside assistant text:
+
+```text
+<device_summary>short text for the Cardputer display</device_summary>
+```
+
+When present, the firmware displays that summary instead of a larger response
+excerpt. The marker must be produced by Claude through a prompt template or a
+future prompt-input path; it is not part of the official BLE command surface.
+
 ## Permission decisions
 
 When `prompt` is present, your device can return a response. Send one of:
@@ -104,6 +114,16 @@ When `prompt` is present, your device can return a response. Send one of:
 
 The `id` must match `prompt.id` exactly. The desktop forwards this to the
 session manager: `"once"` approves the tool call, `"deny"` rejects it.
+
+This fork can also compose an experimental prompt command:
+
+```json
+{"cmd":"prompt","text":"..."}
+```
+
+That command is not part of the official Hardware Buddy protocol. The current
+Claude Desktop Hardware Buddy window will ignore it unless a future supported
+desktop handler is added.
 
 ## One-shot on connect
 

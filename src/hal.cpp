@@ -104,6 +104,8 @@ void halLedSet(uint8_t r, uint8_t g, uint8_t b) {
 
 // No keyboard on StickC — event queue stays empty.
 HalKey halPollKey() { return HalKey::None; }
+bool halPollTextChar(char*) { return false; }
+void halSetTextInputMode(bool) {}
 
 // =============================================================================
 // Cardputer ADV implementation — M5Unified + M5Cardputer
@@ -361,6 +363,10 @@ namespace {
 constexpr size_t KEY_Q_SIZE = 16;
 HalKey    _keyQ[KEY_Q_SIZE];
 uint8_t   _keyHead = 0, _keyTail = 0;
+constexpr size_t TEXT_Q_SIZE = 32;
+char      _textQ[TEXT_Q_SIZE];
+uint8_t   _textHead = 0, _textTail = 0;
+bool      _textInputMode = false;
 
 void _pushKey(HalKey k) {
   uint8_t next = (_keyHead + 1) % KEY_Q_SIZE;
@@ -369,9 +375,18 @@ void _pushKey(HalKey k) {
   _keyHead = next;
 }
 
+void _pushText(char c) {
+  uint8_t next = (_textHead + 1) % TEXT_Q_SIZE;
+  if (next == _textTail) return;
+  _textQ[_textHead] = c;
+  _textHead = next;
+}
+
 std::vector<char> _prevWord;
+bool _prevTab   = false;
 bool _prevEnter = false;
 bool _prevDel   = false;
+bool _prevAlt   = false;
 
 bool _wordContains(const std::vector<char>& v, char c) {
   for (char x : v) if (x == c) return true;
@@ -385,6 +400,10 @@ void _pollKeyEvents() {
   if (!st.fn) {
     for (char c : st.word) {
       if (_wordContains(_prevWord, c)) continue;
+      if (_textInputMode) {
+        if (c >= 32 && c <= 126) _pushText(c);
+        continue;
+      }
       HalKey k = HalKey::None;
       switch (c) {
         case ';': k = HalKey::Up;      break;
@@ -403,10 +422,14 @@ void _pollKeyEvents() {
   // Dedicated keys (Enter / Del) aren't in .word — they have their own
   // state bools. Edge-detect each so Enter confirms and Del closes modals
   // even though those keys also drive the HalBtn backup.
-  if (st.enter && !_prevEnter) _pushKey(HalKey::Approve);
+  if (st.tab   && !_prevTab)   _pushKey(HalKey::Tab);
+  if (st.alt   && !_prevAlt)   _pushKey(HalKey::Alt);
+  if (st.enter && !_prevEnter) _pushKey(st.fn ? HalKey::SendPrompt : HalKey::Approve);
   if (st.del   && !_prevDel)   _pushKey(HalKey::Back);
+  _prevTab   = st.tab;
   _prevEnter = st.enter;
   _prevDel   = st.del;
+  _prevAlt   = st.alt;
   _prevWord  = st.word;
 }
 }  // namespace
@@ -416,6 +439,18 @@ HalKey halPollKey() {
   HalKey k = _keyQ[_keyTail];
   _keyTail = (_keyTail + 1) % KEY_Q_SIZE;
   return k;
+}
+
+bool halPollTextChar(char* out) {
+  if (_textHead == _textTail) return false;
+  char c = _textQ[_textTail];
+  _textTail = (_textTail + 1) % TEXT_Q_SIZE;
+  if (out) *out = c;
+  return true;
+}
+
+void halSetTextInputMode(bool enabled) {
+  _textInputMode = enabled;
 }
 
 namespace { void _pollKeys() { gBtnA.poll(); gBtnB.poll(); _pollKeyEvents(); } }

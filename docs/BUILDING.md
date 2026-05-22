@@ -35,10 +35,14 @@ Then flash:
 ./scripts/flash_cardputer_adv.sh
 ```
 
-If auto port detection misses the device:
+The script scans USB serial ports. If exactly one device is present, it uses
+that port. If multiple USB serial ports are present, it prompts you to select
+one.
+
+If auto port detection misses the device or you want to bypass the prompt:
 
 ```bash
-./scripts/flash_cardputer_adv.sh /dev/tty.usbmodemXXXX
+./scripts/flash_cardputer_adv.sh /dev/cu.usbmodemXXXX
 ```
 
 Clean erase before a first install or when switching firmware families:
@@ -46,6 +50,22 @@ Clean erase before a first install or when switching firmware families:
 ```bash
 ./scripts/erase_cardputer_adv.sh
 ./scripts/flash_cardputer_adv.sh
+```
+
+## Flash an Archived Binary
+
+Archived merged images live under `release/archive/`. Flash one directly without
+rebuilding:
+
+```bash
+./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin
+```
+
+The binary flash script uses the same USB serial port detection as the normal
+flash script. Pass a port as the second argument to bypass auto-selection:
+
+```bash
+./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin /dev/cu.usbmodemXXXX
 ```
 
 ## Normal Boot

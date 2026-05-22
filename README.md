@@ -26,6 +26,11 @@ Research notes are in [`docs/RESEARCH.md`](docs/RESEARCH.md), including the upst
 ./scripts/erase_cardputer_adv.sh
 ```
 
+The flash and erase scripts auto-detect USB serial ports. With one attached
+device they use it directly; with multiple USB serial ports they prompt you to
+choose one. You can still pass a port explicitly, for example
+`./scripts/flash_cardputer_adv.sh /dev/cu.usbmodem1101`.
+
 ## What it does
 <img width="1498" height="958" alt="default screen for claude buddy cardputer in idle mode" src="https://github.com/user-attachments/assets/b4272ba9-3735-48a4-b76d-4af2c46088d2" />
 <img width="1165" height="832" alt="info screen for claude desktop buddy cardputer in idle mode" src="https://github.com/user-attachments/assets/1af36f57-5696-4fb3-aaa4-f749ca196f30" />
@@ -34,7 +39,7 @@ Research notes are in [`docs/RESEARCH.md`](docs/RESEARCH.md), including the upst
 The device connects to the Claude desktop apps over BLE (developer mode required) and acts as a physical session dashboard + permission-approval affordance:
 
 - **Permission prompts** — when Claude asks to run a command, the device plays a Mario 1-UP jingle, pulses the RGB LED red-orange, and shows the tool name. Press `Y` to approve, `N` to deny. Approving in under 5 seconds triggers a heart animation.
-- **Live transcript** — the last three wrapped lines from Claude scroll at the bottom of the home screen.
+- **Claude Session page** — the home screen shows the last three wrapped lines; PET page 3/3 is a BLE-only Claude Session view with session counts, completed assistant-response summaries, and a bottom prompt/input field. If Claude emits `<device_summary>...</device_summary>`, the firmware shows that tiny summary; otherwise it shows a bounded excerpt from official `evt:"turn"` messages and falls back to heartbeat activity when no turn event arrives.
 - **Seven pet moods** — sleep, idle, busy (3+ sessions running), attention (approval pending), celebrate (session just completed), dizzy (you shook it), heart (fast approval).
 - **20 ASCII species + custom GIFs** — cycle with the live picker (Menu → pet) or drag a character pack folder onto the Hardware Buddy window to stream a custom GIF character over BLE.
 - **Tamagotchi mechanics** — the pet has mood, fed, energy, and level stats that drift based on your approval cadence and Claude's token usage. Flip the device face-down and it naps (screen dims, energy refills). Shake it to make it dizzy.
@@ -44,7 +49,7 @@ The device connects to the Claude desktop apps over BLE (developer mode required
 ## What changed from upstream
 
 - **HAL shim** ([`src/hal.h`](src/hal.h) + [`src/hal.cpp`](src/hal.cpp)) — wraps every `M5.Axp` / `M5.Beep` / `M5.BtnA` / `M5.BtnB` / `M5.Imu` / `M5.Rtc` call site so both boards build from the same source tree. `platformio.ini` has two envs: `m5stickc-plus` (unchanged upstream build) and `cardputer-adv`.
-- **Landscape UI** — sprite is now 240×135, every modal / info / pet panel relayouted for the wider-than-tall canvas. Menus centered, settings compacted to 10 rows at 10 px pitch, info/pet pages go full-screen with the pet hidden.
+- **Landscape UI** — sprite is now 240×135, every modal / Claude Session / info / pet panel relayouted for the wider-than-tall canvas. Menus centered, settings compacted to 10 rows at 10 px pitch, session/info/pet pages go full-screen with the pet hidden.
 - **Keyboard input** — a HalKey event queue rising-edge-detects the Cardputer matrix and emits `Approve` / `Deny` / `Back` / `Up` / `Down` / `Left` / `Right` / `Menu` / `Demo`. Enter and `Del`/`` ` `` also swallow their matching BtnA/BtnB release so modal confirms don't double-fire into a home-screen cycle.
 - **Live pet picker** — Menu → **pet** opens a full-size preview with a hint bar at the bottom; step species with `,` / `/` and commit with `Enter`. On commit the pet plays a `P_HEART` one-shot and a 3-note save fanfare.
 - **8-bit SFX library** — 10 tuned note sequences (nav blip, confirm arpeggio, Zelda-lite approve chord, Mario 1-UP alert, back, deny, save fanfare, menu, warn, warn2) played through an in-loop tone sequencer shared across both boards. New `halBeepSeq()` replaces the previous single-note `beep()`.
@@ -63,7 +68,7 @@ Original M5StickC Plus firmware path is preserved — the HAL passes through to 
 
 ### Pre-built release (no toolchain)
 
-Grab the latest merged `.bin` from the [**Releases page**](https://github.com/y88huang/claude-desktop-buddy-cardputer/releases/latest) and flash it with either:
+Grab the latest merged `.bin` from the [**Releases page**](https://github.com/haohlin/claude-desktop-buddy-m5stack-cardputer-adv/releases/latest) and flash it with either:
 
 **M5Burner** — top-right **Open Custom Firmware** → pick `claude-buddy-cardputer-*.bin` → select your USB serial port → baud `921600` → **Burn**.
 
@@ -100,10 +105,12 @@ Identical to upstream. Enable developer mode in Claude (**Help → Troubleshooti
 
 | Key | Home screen | In a modal (menu / settings / reset / picker) | In an approval prompt |
 |---|---|---|---|
-| `Enter` | cycle display mode | **confirm / commit** | **approve** |
+| `Enter` | cycle display mode; on Claude Session acts on selected area | **confirm / commit** | **approve** |
+| `Tab` | switch PET / INFO tab group | — | — |
 | `Backspace` / `` ` `` | — | **close modal** | **deny** |
-| `;` / `.` | scroll transcript up / down | move highlight up / down | — |
+| `;` / `.` | select Claude / Prompt on Claude Session; scroll expanded response | move highlight up / down | — |
 | `,` / `/` | prev / next page (INFO & PET) | picker: prev / next species | — |
+| `Fn+Enter` | emit experimental prompt command; stock Claude Desktop needs a handler | — | — |
 | `Y` / `N` | — | (picker) confirm | **approve / deny** |
 | `M` | open menu | — | — |
 | `G` | toggle demo mode | — | — |
@@ -123,6 +130,7 @@ Unchanged from upstream — drag a character pack folder onto the drop target in
 ## Layout notes
 
 - **Home**: pet fills the upper 80 px, the 3-line transcript is block-centered at x=57 in the bottom 28 px.
+- **Claude Session**: PET page 3/3. The upper panel is Claude output with the Claude orange accent; the bottom panel is the prompt/input field. `;` selects Claude, `.` selects Prompt, `Enter` expands/compacts or enters typing, and `Fn+Enter` emits an experimental prompt command over BLE. Stock Claude Desktop ignores that command until a supported desktop handler exists. The firmware stores only a small fixed assistant excerpt to keep RAM use predictable and prefers tagged `<device_summary>` text when present.
 - **Clock face** (idle + USB): one-line `HH:MM:SS  Mon DD` at size 1 in a 10 px top strip.
 - **Pet stats** (the `B`-cycle stats page, separate from the menu's pet picker): two-column landscape layout, mood / fed / energy / Lv badge on the left, counters on the right.
 - **Info pages**: full-screen, pet hidden. ABOUT and KEYBOARD copies rewritten for Cardputer bindings; CREDITS hardware line updated to `M5 Cardputer ADV / ESP32-S3`.
@@ -133,6 +141,8 @@ Unchanged from upstream — drag a character pack folder onto the drop target in
 - `halTempC()` is stubbed at 25 °C (same reason).
 - If the BMI270 doesn't come up (stock Cardputer, or M5Unified config mismatch), shake and face-down nap silently no-op. Serial prints `IMU: begin=0 type=0` at boot in that case.
 - Some info-page copy still reads long for landscape; the CLAUDE / DEVICE / BLUETOOTH pages fit but CREDITS is tight.
+- Official Hardware Buddy BLE currently exposes heartbeat snapshots, assistant turn events, file transfer, and permission approve/deny. It does not expose prompt sending or session switching. The firmware can emit an experimental `{"cmd":"prompt"}` message, but stock Claude Desktop will ignore it until a supported desktop handler exists; the device keeps the prompt draft and reports that state. The compact-summary template for that future path is documented in [`docs/DEVICE_SUMMARY_PROMPT.md`](docs/DEVICE_SUMMARY_PROMPT.md).
+- `AskUserQuestion` prompts are shown as Desktop questions. `Y` only allows Claude to use the question tool; it does not select an option or send an answer back to Claude. Answer those in Claude Desktop until a supported question-answer transport exists.
 
 ## Credits
 

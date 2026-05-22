@@ -4,6 +4,9 @@
 #include "ble_bridge.h"
 #include "xfer.h"
 
+constexpr uint8_t ASSISTANT_LINE_N = 8;
+constexpr uint8_t ASSISTANT_LINE_W = 80;
+
 struct TamaState {
   uint8_t  sessionsTotal;
   uint8_t  sessionsRunning;
@@ -16,6 +19,12 @@ struct TamaState {
   char     lines[8][92];
   uint8_t  nLines;
   uint16_t lineGen;          // bumps when lines change — lets UI reset scroll
+  char     assistantLines[ASSISTANT_LINE_N][ASSISTANT_LINE_W];
+  uint8_t  nAssistantLines;
+  uint16_t assistantGen;     // bumps when a completed assistant turn arrives
+  bool     assistantTruncated;
+  bool     assistantFromSummary;
+  uint32_t assistantUpdated;
   char     promptId[40];     // pending permission request ID; empty = no prompt
   char     promptTool[20];
   char     promptHint[44];
@@ -67,10 +76,143 @@ inline const char* dataScenarioName() {
 static bool _rtcValid = false;
 inline bool dataRtcValid() { return _rtcValid; }
 
+static void _assistantAppendSegment(TamaState* out, const char* start, size_t len) {
+  while (len && (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r')) { start++; len--; }
+  while (len && (start[len - 1] == ' ' || start[len - 1] == '\t' ||
+                 start[len - 1] == '\n' || start[len - 1] == '\r')) len--;
+  if (len == 0) return;
+
+  while (len) {
+    if (out->nAssistantLines >= ASSISTANT_LINE_N) {
+      out->assistantTruncated = true;
+      return;
+    }
+
+    const size_t maxTake = ASSISTANT_LINE_W - 1;
+    size_t take = len > maxTake ? maxTake : len;
+    if (len > maxTake) {
+      for (size_t i = take; i > 28; --i) {
+        if (start[i - 1] == ' ') { take = i - 1; break; }
+      }
+    }
+
+    char* dst = out->assistantLines[out->nAssistantLines++];
+    memcpy(dst, start, take);
+    dst[take] = 0;
+
+    start += take;
+    len -= take;
+    while (len && *start == ' ') { start++; len--; }
+  }
+}
+
+static void _assistantAppendTextRange(TamaState* out, const char* text, size_t len) {
+  const char* seg = text;
+  const char* end = text + len;
+  for (const char* p = text; p <= end; ++p) {
+    if (p == end || *p == '\n' || *p == '\r') {
+      _assistantAppendSegment(out, seg, (size_t)(p - seg));
+      if (p == end) break;
+      while (p + 1 < end && (p[1] == '\n' || p[1] == '\r')) ++p;
+      seg = p + 1;
+    }
+  }
+}
+
+static void _assistantAppendText(TamaState* out, const char* text) {
+  if (!text) return;
+  _assistantAppendTextRange(out, text, strlen(text));
+}
+
+static bool _assistantAppendDeviceSummary(TamaState* out, const char* text) {
+  if (!text) return false;
+  const char* start = strstr(text, "<device_summary>");
+  if (!start) return false;
+  start += strlen("<device_summary>");
+  const char* end = strstr(start, "</device_summary>");
+  if (!end || end <= start) return false;
+  _assistantAppendTextRange(out, start, (size_t)(end - start));
+  return true;
+}
+
+static bool _applyTurnEvent(JsonDocument& doc, TamaState* out) {
+  const char* evt = doc["evt"];
+  if (!evt) return false;
+  if (strcmp(evt, "turn") != 0) return true;
+
+  const char* role = doc["role"];
+  if (!role || strcmp(role, "assistant") != 0) return true;
+
+  uint8_t oldN = out->nAssistantLines;
+  bool oldSummary = out->assistantFromSummary;
+  out->nAssistantLines = 0;
+  out->assistantTruncated = false;
+  out->assistantFromSummary = false;
+
+  JsonVariant contentValue = doc["content"];
+  const char* singleText = doc["text"];
+  if (!singleText && contentValue.is<const char*>()) singleText = contentValue.as<const char*>();
+  if (singleText) {
+    bool usedSummary = _assistantAppendDeviceSummary(out, singleText);
+    if (!usedSummary) _assistantAppendText(out, singleText);
+    if (out->nAssistantLines == 0) {
+      out->nAssistantLines = oldN;
+      out->assistantFromSummary = oldSummary;
+      return true;
+    }
+    out->assistantFromSummary = usedSummary;
+    out->assistantGen++;
+    out->assistantUpdated = millis();
+    return true;
+  }
+
+  JsonArray content = contentValue.as<JsonArray>();
+  if (content.isNull()) {
+    out->nAssistantLines = oldN;
+    out->assistantFromSummary = oldSummary;
+    return true;
+  }
+
+  bool usedSummary = false;
+  for (JsonVariant v : content) {
+    JsonObject block = v.as<JsonObject>();
+    const char* type = block["type"];
+    const char* text = block["text"];
+    if (!text) text = v.as<const char*>();
+    if (!text || (type && strcmp(type, "text") != 0)) continue;
+    if (_assistantAppendDeviceSummary(out, text)) usedSummary = true;
+    if (out->assistantTruncated) break;
+  }
+
+  if (!usedSummary) {
+    for (JsonVariant v : content) {
+      JsonObject block = v.as<JsonObject>();
+      const char* type = block["type"];
+      const char* text = block["text"];
+      if (!text) text = v.as<const char*>();
+      if (!text || (type && strcmp(type, "text") != 0)) continue;
+      _assistantAppendText(out, text);
+      if (out->assistantTruncated) break;
+    }
+  }
+
+  if (out->nAssistantLines == 0) {
+    out->nAssistantLines = oldN;
+    out->assistantFromSummary = oldSummary;
+    return true;
+  }
+
+  out->assistantFromSummary = usedSummary;
+  out->assistantGen++;
+  out->assistantUpdated = millis();
+  return true;
+}
+
 static void _applyJson(const char* line, TamaState* out) {
   JsonDocument doc;
   if (deserializeJson(doc, line)) return;
   if (xferCommand(doc)) { _lastLiveMs = millis(); return; }
+  if (_applyTurnEvent(doc, out)) { _lastLiveMs = millis(); return; }
 
   // Bridge sends {"time":[epoch_sec, tz_offset_sec]}; gmtime_r on the
   // adjusted epoch yields local components including weekday.
@@ -130,19 +272,25 @@ template<size_t N>
 struct _LineBuf {
   char buf[N];
   uint16_t len = 0;
+  bool overflow = false;
   void feed(Stream& s, TamaState* out, uint16_t budget = 256) {
     while (s.available() && budget--) {
       char c = s.read();
       if (c == '\n' || c == '\r') {
-        if (len > 0) { buf[len]=0; if (buf[0]=='{') _applyJson(buf, out); len=0; }
+        if (!overflow && len > 0) { buf[len]=0; if (buf[0]=='{') _applyJson(buf, out); }
+        len = 0;
+        overflow = false;
       } else if (len < N-1) {
         buf[len++] = c;
+      } else {
+        overflow = true;
       }
     }
   }
 };
 
-static _LineBuf<1024> _usbLine, _btLine;
+static _LineBuf<1024> _usbLine;
+static _LineBuf<4352> _btLine;
 
 inline void dataPoll(TamaState* out) {
   uint32_t now = millis();
@@ -166,13 +314,16 @@ inline void dataPoll(TamaState* out) {
     if (c < 0) break;
     _lastBtByteMs = millis();
     if (c == '\n' || c == '\r') {
-      if (_btLine.len > 0) {
+      if (!_btLine.overflow && _btLine.len > 0) {
         _btLine.buf[_btLine.len] = 0;
         if (_btLine.buf[0] == '{') _applyJson(_btLine.buf, out);
-        _btLine.len = 0;
       }
+      _btLine.len = 0;
+      _btLine.overflow = false;
     } else if (_btLine.len < sizeof(_btLine.buf) - 1) {
       _btLine.buf[_btLine.len++] = (char)c;
+    } else {
+      _btLine.overflow = true;
     }
     if (millis() - bleStart > 8) break;
   }

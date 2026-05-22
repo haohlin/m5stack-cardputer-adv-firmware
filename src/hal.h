@@ -124,16 +124,25 @@ void halLedSet(uint8_t r, uint8_t g, uint8_t b);
 // Physical layout notes for the Cardputer:
 //   Arrow-glyph keys — `;` (up), `.` (down), `,` (left), `/` (right)
 //   Shortcut letters — `y` / `n` / `m` / `g`
+//   Session page — Tab switches major tabs, Enter acts on the selected area,
+//   Fn+Enter emits an experimental prompt command. Printable key edges are
+//   also exposed through halPollTextChar() so the prompt field can receive
+//   normal typing.
 // The Cardputer has a hardware power slide switch, so there's no software
 // power chord — the existing 30 s idle auto-sleep handles the screen.
 // ---------------------------------------------------------------------------
 enum class HalKey : uint8_t {
   None = 0,
   Up, Down, Left, Right,
+  Tab,
   Approve,       // y / Enter
   Deny,          // n
   Back,          // Esc (backtick) / Del / Backspace — close modal
+  SendPrompt,    // Fn + Enter
+  Alt,           // left Alt
   Menu,          // m
   Demo,          // g
 };
 HalKey halPollKey();
+bool halPollTextChar(char* out);
+void halSetTextInputMode(bool enabled);

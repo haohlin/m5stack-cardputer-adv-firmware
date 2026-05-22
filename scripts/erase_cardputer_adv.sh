@@ -4,9 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-ARGS=(run -e cardputer-adv -t erase)
-if [[ $# -gt 0 ]]; then
-  ARGS+=("--upload-port" "$1")
+if [[ $# -gt 1 ]]; then
+  echo "Usage: $0 [serial-port]" >&2
+  exit 2
 fi
 
+PORT="$(./scripts/select_cardputer_port.sh "${1:-}")"
+echo "Using Cardputer ADV port: $PORT" >&2
+
+ARGS=(run -e cardputer-adv -t erase --upload-port "$PORT")
 exec ./scripts/pio_local.sh "${ARGS[@]}"

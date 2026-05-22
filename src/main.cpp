@@ -54,6 +54,8 @@ constexpr int INFO_PANEL_TOP = 70;
 // Colors used across multiple UI surfaces
 const uint16_t HOT   = 0xFA20;   // red-orange: warnings, impatience, deny
 const uint16_t PANEL = 0x2104;   // overlay panel background
+const uint16_t CLAUDE_ORANGE = 0xDBAA;
+const uint16_t USER_GRAY = 0xC618;
 
 enum PersonaState { P_SLEEP, P_IDLE, P_BUSY, P_ATTENTION, P_CELEBRATE, P_DIZZY, P_HEART };
 const char* stateNames[] = { "sleep", "idle", "busy", "attention", "celebrate", "dizzy", "heart" };
@@ -76,10 +78,23 @@ enum DisplayMode { DISP_NORMAL, DISP_PET, DISP_INFO, DISP_COUNT };
 uint8_t displayMode = DISP_NORMAL;
 uint8_t infoPage = 0;
 uint8_t petPage = 0;
-const uint8_t PET_PAGES = 2;
+const uint8_t PET_PAGES = 3;
 uint8_t msgScroll = 0;
+uint8_t consoleScroll = 0;
+uint8_t sessionFocus = 1;          // 0 = Claude response, 1 = prompt input
+bool    sessionPromptEditing = false;
+bool    sessionClaudeExpanded = false;
+bool    sessionAwaitingReply = false;
+bool    sessionSendPending = false;
+char    sessionPrompt[181] = "";
+uint8_t sessionPromptLen = 0;
+char    sessionToast[24] = "";
+uint32_t sessionToastUntilMs = 0;
+uint32_t sessionSendAtMs = 0;
 uint16_t lastLineGen = 0;
 char     lastPromptId[40] = "";
+DisplayMode promptReturnMode = DISP_NORMAL;
+bool     promptInterruptedMode = false;
 uint32_t lastInteractMs = 0;
 bool     dimmed = false;
 bool     screenOff = false;
@@ -136,6 +151,9 @@ const uint32_t SCREEN_OFF_MS = 120000;
 bool     napping = false;
 uint32_t napStartMs = 0;
 uint32_t promptArrivedMs = 0;
+uint32_t decisionUntilMs = 0;
+char     decisionLabel[12] = "";
+uint16_t decisionColor = GREEN;
 
 // Face-down = Z-axis dominant and negative. Debounced so a toss doesn't count.
 static bool isFaceDown() {
@@ -214,6 +232,90 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)json, n);
   bleWrite((const uint8_t*)"\n", 1);
 }
+
+static bool promptIsQuestion() {
+  return strcmp(tama.promptTool, "AskUserQuestion") == 0;
+}
+
+static void markDecision(bool approved) {
+  const char* label = approved ? (promptIsQuestion() ? "no answer" : "approved") : "denied";
+  strncpy(decisionLabel, label, sizeof(decisionLabel) - 1);
+  decisionLabel[sizeof(decisionLabel) - 1] = 0;
+  decisionColor = approved ? GREEN : HOT;
+  decisionUntilMs = millis() + 1500;
+}
+
+static bool consolePageActive() {
+  return displayMode == DISP_PET && petPage == 2;
+}
+
+void applyDisplayMode();
+
+static void markSessionToast(const char* msg) {
+  strncpy(sessionToast, msg ? msg : "", sizeof(sessionToast) - 1);
+  sessionToast[sizeof(sessionToast) - 1] = 0;
+  sessionToastUntilMs = millis() + 1500;
+}
+
+static void sessionAppendChar(char c) {
+  if (sessionPromptLen >= sizeof(sessionPrompt) - 1) {
+    markSessionToast("prompt full");
+    return;
+  }
+  sessionPrompt[sessionPromptLen++] = c;
+  sessionPrompt[sessionPromptLen] = 0;
+}
+
+static void sessionDeleteChar() {
+  if (sessionPromptLen == 0) return;
+  sessionPrompt[--sessionPromptLen] = 0;
+}
+
+static void switchMajorTab() {
+  if (displayMode == DISP_INFO) displayMode = DISP_PET;
+  else if (displayMode == DISP_PET) displayMode = DISP_INFO;
+  else displayMode = DISP_PET;
+  sessionPromptEditing = false;
+  applyDisplayMode();
+  characterInvalidate();
+  if (buddyMode) buddyInvalidate();
+}
+
+static void sendSessionPrompt() {
+  if (sessionPromptLen == 0) {
+    markSessionToast("empty prompt");
+    return;
+  }
+
+  static const char SUMMARY_SUFFIX[] =
+    "\n\nFor the M5Stack Cardputer ADV display, include one tiny device summary:\n"
+    "<device_summary>Max 180 characters. Answer, decision, or next action only.</device_summary>";
+
+  char body[384];
+  int bodyLen = snprintf(body, sizeof(body), "%s%s", sessionPrompt, SUMMARY_SUFFIX);
+  if (bodyLen <= 0 || bodyLen >= (int)sizeof(body)) {
+    markSessionToast("prompt too long");
+    return;
+  }
+
+  JsonDocument doc;
+  doc["cmd"] = "prompt";
+  doc["text"] = body;
+  char json[640];
+  size_t n = serializeJson(doc, json, sizeof(json));
+  if (n == 0 || n >= sizeof(json) - 1) {
+    markSessionToast("send too long");
+    return;
+  }
+
+  sendCmd(json);
+  sessionPromptEditing = false;
+  sessionAwaitingReply = true;
+  sessionSendPending = true;
+  sessionSendAtMs = millis();
+  markSessionToast("needs handler");
+}
+
 const uint8_t INFO_PAGES = 6;
 const uint8_t INFO_PG_BUTTONS = 1;
 const uint8_t INFO_PG_CREDITS = 5;
@@ -230,11 +332,11 @@ void applyDisplayMode() {
   characterInvalidate();  // redraws character on next tick (text mode path)
 }
 
-// "pet" at index 1 cycles the active species inline (like "demo" toggles);
+// "pet" cycles the active species inline (like "demo" toggles);
 // menuConfirm() keeps the menu open for this item so the user can mash it
 // to flip through all 20+ species without reopening the menu each time.
-const char* menuItems[] = { "settings", "pet", "turn off", "help", "about", "demo", "close" };
-const uint8_t MENU_N = 7;
+const char* menuItems[] = { "settings", "session", "pet", "turn off", "help", "about", "demo", "close" };
+const uint8_t MENU_N = 8;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
@@ -258,8 +360,9 @@ static void applySetting(uint8_t idx) {
   switch (idx) {
     case 0:
       brightLevel = (brightLevel + 1) % 5;
+      s.bright = brightLevel;
       applyBrightness();
-      return;
+      break;
     case 1: s.sound = !s.sound; break;
     case 2:
       // BT toggle is a stored preference only — BLE stays live. Turning
@@ -460,6 +563,13 @@ void menuConfirm() {
   switch (menuSel) {
     case 0: settingsOpen = true; menuOpen = false; settingsSel = 0; break;
     case 1:
+      menuOpen = false;
+      displayMode = DISP_PET;
+      petPage = 2;
+      applyDisplayMode();
+      characterInvalidate();
+      break;
+    case 2:
       // Enter the live pet picker: close the menu, force home display so
       // the pet renders at full size, and let Left/Right step species
       // without the menu covering the preview.
@@ -469,23 +579,28 @@ void menuConfirm() {
       petPickerOpen = true;
       characterInvalidate();
       break;
-    case 2: halPowerOff(); break;
-    case 3:
+    case 3: halPowerOff(); break;
     case 4:
+    case 5:
       menuOpen = false;
       displayMode = DISP_INFO;
-      infoPage = (menuSel == 3) ? INFO_PG_BUTTONS : INFO_PG_CREDITS;
+      infoPage = (menuSel == 4) ? INFO_PG_BUTTONS : INFO_PG_CREDITS;
       applyDisplayMode();
       characterInvalidate();
       break;
-    case 5: dataSetDemo(!dataDemo()); break;
-    case 6: menuOpen = false; characterInvalidate(); break;
+    case 6: dataSetDemo(!dataDemo()); break;
+    case 7: menuOpen = false; characterInvalidate(); break;
   }
 }
 
 void drawMenu() {
   const Palette& p = characterPalette();
-  int mw = 118, mh = 16 + MENU_N * 14 + MENU_HINT_H;
+#ifdef CARDPUTER_ADV
+  const int PITCH = 12;
+#else
+  const int PITCH = 14;
+#endif
+  int mw = 118, mh = 16 + MENU_N * PITCH + MENU_HINT_H;
   int mx = (W - mw) / 2, my = (H - mh) / 2;
   spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
@@ -493,10 +608,10 @@ void drawMenu() {
   for (int i = 0; i < MENU_N; i++) {
     bool sel = (i == menuSel);
     spr.setTextColor(sel ? p.text : p.textDim, PANEL);
-    spr.setCursor(mx + 6, my + 8 + i * 14);
+    spr.setCursor(mx + 6, my + 8 + i * PITCH);
     spr.print(sel ? "> " : "  ");
     spr.print(menuItems[i]);
-    if (i == 5) spr.print(dataDemo() ? "  on" : "  off");
+    if (i == 6) spr.print(dataDemo() ? "  on" : "  off");
   }
   drawMenuHints(p, mx, mw, my + mh - 12);
 }
@@ -786,13 +901,13 @@ void drawInfo() {
 #endif
 #ifdef CARDPUTER_ADV
     spr.setTextColor(p.text, p.bg);    ln("Enter  confirm / select");
+    spr.setTextColor(p.textDim, p.bg); ln("Tab    pet/device tabs");
     spr.setTextColor(p.textDim, p.bg); ln("`/Del  close modal (Esc)"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln(";  .   up / down");
     spr.setTextColor(p.textDim, p.bg); ln(",  /   previous / next page"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("Y  N   approve / deny");
-    spr.setTextColor(p.textDim, p.bg); ln("       on a pending prompt"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("M      open menu");
-    spr.setTextColor(p.textDim, p.bg); ln("G      toggle demo mode"); y += 4;
+    spr.setTextColor(p.text, p.bg);    ln("Fn+Ent needs handler");
+    spr.setTextColor(p.textDim, p.bg); ln("Y/N approve or deny prompt"); y += 4;
+    spr.setTextColor(p.text, p.bg);    ln("M menu   G demo");
     spr.setTextColor(p.textDim, p.bg); ln("Power: slide switch on side");
 #else
     spr.setTextColor(p.text, p.bg);    ln("A   front");
@@ -930,7 +1045,9 @@ void drawInfo() {
 
 // Greedy word-wrap into fixed-width rows. Continuation rows get a leading
 // space. Returns number of rows written.
-static uint8_t wrapInto(const char* in, char out[][24], uint8_t maxRows, uint8_t width) {
+template<size_t COLS>
+static uint8_t wrapInto(const char* in, char (*out)[COLS], uint8_t maxRows, uint8_t width) {
+  if (width >= COLS) width = COLS - 1;
   uint8_t row = 0, col = 0;
   const char* p = in;
   while (*p && row < maxRows) {
@@ -965,6 +1082,7 @@ static uint8_t wrapInto(const char* in, char out[][24], uint8_t maxRows, uint8_t
 static void drawApproval() {
   const Palette& p = characterPalette();
   uint32_t waited = (millis() - promptArrivedMs) / 1000;
+  bool questionPrompt = promptIsQuestion();
 
 #ifdef CARDPUTER_ADV
   // Full-screen landscape approval — pet is suppressed in prompt mode,
@@ -974,38 +1092,58 @@ static void drawApproval() {
   spr.setTextSize(1);
   spr.setTextColor(waited >= 10 ? HOT : p.textDim, p.bg);
   spr.setCursor(4, 6);
-  spr.printf("approve?  %lus", (unsigned long)waited);
+  spr.printf(questionPrompt ? "question  %lus" : "approve?  %lus", (unsigned long)waited);
 
-  int toolLen = strlen(tama.promptTool);
+  const char* title = questionPrompt ? "Desktop question" : tama.promptTool;
+  int toolLen = strlen(title);
   spr.setTextColor(p.text, p.bg);
   spr.setTextSize(toolLen <= 20 ? 2 : 1);
   spr.setTextDatum(MC_DATUM);
-  spr.drawString(tama.promptTool, CX, 40);
+  spr.drawString(title, CX, questionPrompt ? 34 : 40);
   spr.setTextDatum(TL_DATUM);
   spr.setTextSize(1);
 
-  spr.setTextColor(p.textDim, p.bg);
   const int WRAP = 38;
   int hlen = strlen(tama.promptHint);
-  spr.setCursor(4, 72);
-  if (hlen <= WRAP) {
-    spr.print(tama.promptHint);
+  if (questionPrompt) {
+    spr.setTextColor(HOT, p.bg);
+    spr.setCursor(4, 54);
+    spr.print("Y allows question tool only");
+    spr.setCursor(4, 66);
+    spr.print("No option answer is sent");
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(4, 82);
+    if (hlen <= WRAP) {
+      spr.print(tama.promptHint);
+    } else {
+      char buf[WRAP + 1];
+      memcpy(buf, tama.promptHint, WRAP); buf[WRAP] = 0;
+      spr.print(buf);
+      spr.setCursor(4, 94);
+      spr.printf("%.38s", tama.promptHint + WRAP);
+    }
   } else {
-    char buf[WRAP + 1];
-    memcpy(buf, tama.promptHint, WRAP); buf[WRAP] = 0;
-    spr.print(buf);
-    spr.setCursor(4, 84);
-    spr.printf("%.38s", tama.promptHint + WRAP);
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(4, 72);
+    if (hlen <= WRAP) {
+      spr.print(tama.promptHint);
+    } else {
+      char buf[WRAP + 1];
+      memcpy(buf, tama.promptHint, WRAP); buf[WRAP] = 0;
+      spr.print(buf);
+      spr.setCursor(4, 84);
+      spr.printf("%.38s", tama.promptHint + WRAP);
+    }
   }
 
   if (responseSent) {
-    spr.setTextColor(p.textDim, p.bg);
+    spr.setTextColor(decisionColor, p.bg);
     spr.setCursor(4, H - 14);
-    spr.print("sent...");
+    spr.print(decisionLabel[0] ? decisionLabel : "sent");
   } else {
     spr.setTextColor(GREEN, p.bg);
     spr.setCursor(4, H - 14);
-    spr.print("Y: approve");
+    spr.print(questionPrompt ? "Y: allow" : "Y: approve");
     spr.setTextColor(HOT, p.bg);
     spr.setCursor(W - 52, H - 14);
     spr.print("N: deny");
@@ -1019,34 +1157,44 @@ static void drawApproval() {
   spr.setTextColor(p.textDim, p.bg);
   spr.setCursor(4, H - AREA + 4);
   if (waited >= 10) spr.setTextColor(HOT, p.bg);
-  spr.printf("approve? %lus", (unsigned long)waited);
+  spr.printf(questionPrompt ? "question %lus" : "approve? %lus", (unsigned long)waited);
 
   // Size 2 only if it fits one line (~10 chars at 12px on 135px screen)
-  int toolLen = strlen(tama.promptTool);
+  const char* title = questionPrompt ? "Question" : tama.promptTool;
+  int toolLen = strlen(title);
   spr.setTextColor(p.text, p.bg);
   spr.setTextSize(toolLen <= 10 ? 2 : 1);
   spr.setCursor(4, H - AREA + (toolLen <= 10 ? 14 : 18));
-  spr.print(tama.promptTool);
+  spr.print(title);
   spr.setTextSize(1);
 
-  // Hint wraps at ~21 chars to two lines under the tool name
-  spr.setTextColor(p.textDim, p.bg);
-  int hlen = strlen(tama.promptHint);
-  spr.setCursor(4, H - AREA + 34);
-  spr.printf("%.21s", tama.promptHint);
-  if (hlen > 21) {
+  if (questionPrompt) {
+    spr.setTextColor(HOT, p.bg);
+    spr.setCursor(4, H - AREA + 34);
+    spr.print("no answer sent");
+    spr.setTextColor(p.textDim, p.bg);
     spr.setCursor(4, H - AREA + 42);
-    spr.printf("%.21s", tama.promptHint + 21);
+    spr.print("answer on desktop");
+  } else {
+    // Hint wraps at ~21 chars to two lines under the tool name
+    spr.setTextColor(p.textDim, p.bg);
+    int hlen = strlen(tama.promptHint);
+    spr.setCursor(4, H - AREA + 34);
+    spr.printf("%.21s", tama.promptHint);
+    if (hlen > 21) {
+      spr.setCursor(4, H - AREA + 42);
+      spr.printf("%.21s", tama.promptHint + 21);
+    }
   }
 
   if (responseSent) {
-    spr.setTextColor(p.textDim, p.bg);
+    spr.setTextColor(decisionColor, p.bg);
     spr.setCursor(4, H - 12);
-    spr.print("sent...");
+    spr.print(decisionLabel[0] ? decisionLabel : "sent");
   } else {
     spr.setTextColor(GREEN, p.bg);
     spr.setCursor(4, H - 12);
-    spr.print("A: approve");
+    spr.print(questionPrompt ? "A: allow" : "A: approve");
     spr.setTextColor(HOT, p.bg);
     spr.setCursor(W - 48, H - 12);
     spr.print("B: deny");
@@ -1234,12 +1382,15 @@ static void drawPetHowTo(const Palette& p) {
 #endif
 }
 
+void drawConsole();
+
 void drawPet() {
   const Palette& p = characterPalette();
   int y = PET_PANEL_TOP;
 
   if (petPage == 0) drawPetStats(p);
-  else drawPetHowTo(p);
+  else if (petPage == 1) drawPetHowTo(p);
+  else { drawConsole(); return; }
 
   // Header on top of whichever page drew — title left, counter right
   spr.setTextSize(1);
@@ -1253,6 +1404,187 @@ void drawPet() {
   spr.setTextColor(p.textDim, p.bg);
   spr.setCursor(W - 28, y + 2);
   spr.printf("%u/%u", petPage + 1, PET_PAGES);
+}
+
+static void drawDecisionToast(const Palette& p) {
+  if ((int32_t)(millis() - decisionUntilMs) >= 0 || !decisionLabel[0]) return;
+  const int bw = 72, bh = 14;
+  int bx = W - bw - 4;
+  int by = H - bh - 4;
+  spr.fillRoundRect(bx, by, bw, bh, 3, PANEL);
+  spr.drawRoundRect(bx, by, bw, bh, 3, decisionColor);
+  spr.setTextSize(1);
+  spr.setTextColor(decisionColor, PANEL);
+  spr.setCursor(bx + 6, by + 3);
+  spr.print(decisionLabel);
+  spr.setTextColor(p.text, p.bg);
+}
+
+static uint8_t rowsAppend(char rows[][40], uint8_t nRows, uint8_t maxRows,
+                          uint8_t width, const char* text) {
+  if (!text || !text[0] || nRows >= maxRows) return nRows;
+  return nRows + wrapInto(text, &rows[nRows], maxRows - nRows, width);
+}
+
+static uint8_t consoleAnswerRows(char rows[][40], uint8_t maxRows, uint8_t width) {
+  uint8_t n = 0;
+  if (tama.connected && tama.nAssistantLines > 0) {
+    for (uint8_t i = 0; i < tama.nAssistantLines && n < maxRows; i++) {
+      n = rowsAppend(rows, n, maxRows, width, tama.assistantLines[i]);
+    }
+    return n;
+  }
+
+  if (tama.connected && tama.msg[0] && strcmp(tama.msg, "No Claude connected") != 0) {
+    n = rowsAppend(rows, n, maxRows, width, tama.msg);
+  }
+  for (uint8_t i = 0; i < tama.nLines && n < maxRows; i++) {
+    n = rowsAppend(rows, n, maxRows, width, tama.lines[i]);
+  }
+  return n;
+}
+
+void drawConsole() {
+  const Palette& p = characterPalette();
+  spr.fillSprite(p.bg);
+  spr.setTextSize(1);
+
+#ifdef CARDPUTER_ADV
+  const uint8_t WIDTH = 38;
+#else
+  const uint8_t WIDTH = 21;
+#endif
+
+  spr.setTextColor(p.text, p.bg);
+  spr.setCursor(4, 4);
+  spr.print("Claude Session");
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(W - 28, 4);
+  spr.printf("%u/%u", petPage + 1, PET_PAGES);
+  spr.setTextColor(dataBtActive() ? GREEN : p.textDim, p.bg);
+  spr.setCursor(W - 76, 4);
+  spr.print(dataBtActive() ? "BLE" : "idle");
+  if (bleConnected() && bleSecure()) {
+    spr.setTextColor(p.body, p.bg);
+    spr.setCursor(W - 48, 4);
+    spr.print("*");
+  }
+
+  int y = 16;
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(4, y);
+  const char* liveState = "offline";
+  uint16_t liveColor = p.textDim;
+  if (tama.connected) {
+    if (tama.sessionsWaiting) {
+      liveState = "waiting";
+      liveColor = HOT;
+    } else if (tama.sessionsRunning) {
+      liveState = "busy";
+      liveColor = GREEN;
+    } else if (sessionAwaitingReply) {
+      liveState = "handler?";
+      liveColor = p.body;
+    } else {
+      liveState = "idle";
+      liveColor = p.textDim;
+    }
+  }
+  spr.printf("S %u  R %u  W %u", tama.sessionsTotal, tama.sessionsRunning, tama.sessionsWaiting);
+  spr.setTextColor(liveColor, p.bg);
+  spr.setCursor(W - 58, y);
+  spr.print(liveState);
+  y += 10;
+
+  spr.setTextColor(tama.sessionsWaiting ? HOT : (tama.sessionsRunning ? GREEN : p.textDim), p.bg);
+  spr.setCursor(4, y);
+  if (tama.promptId[0]) {
+    uint32_t waited = (millis() - promptArrivedMs) / 1000;
+    spr.printf("prompt %.16s %lus", tama.promptTool, (unsigned long)waited);
+  } else {
+    spr.printf("%.38s", tama.msg);
+  }
+  y += 12;
+
+  static char answerRows[18][40];
+  uint8_t nAnswer = consoleAnswerRows(answerRows, 18, WIDTH);
+
+  const int promptH = sessionPromptEditing ? 42 : 36;
+  const int promptY = H - promptH - 3;
+  const int responseY = y;
+  const int responseH = promptY - responseY - 4;
+  const bool claudeSelected = sessionFocus == 0;
+  const bool promptSelected = sessionFocus == 1;
+
+  spr.drawRoundRect(4, responseY, W - 8, responseH, 3,
+                    claudeSelected ? CLAUDE_ORANGE : p.textDim);
+  spr.setTextColor(CLAUDE_ORANGE, p.bg);
+  spr.setCursor(10, responseY + 4);
+  spr.print("Claude");
+  spr.setTextColor(claudeSelected ? CLAUDE_ORANGE : p.textDim, p.bg);
+  spr.setCursor(58, responseY + 4);
+  spr.print(sessionClaudeExpanded ? "full" : "compact");
+  if (tama.assistantTruncated) spr.print("+");
+
+  uint8_t showAnswer = (responseH > 20) ? (responseH - 20) / 8 : 1;
+  if (!sessionClaudeExpanded && showAnswer > 2) showAnswer = 2;
+  uint8_t maxStart = (sessionClaudeExpanded && nAnswer > showAnswer) ? (nAnswer - showAnswer) : 0;
+  if (consoleScroll > maxStart) consoleScroll = maxStart;
+  int ty = responseY + 18;
+  if (nAnswer == 0) {
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(10, ty);
+    spr.print(tama.connected ? "No turn event yet" : "No Claude connected");
+  } else {
+    for (uint8_t i = 0; i < showAnswer && consoleScroll + i < nAnswer; i++) {
+      spr.setTextColor(i == 0 && consoleScroll == 0 ? p.text : p.textDim, p.bg);
+      spr.setCursor(10, ty + i * 8);
+      spr.print(answerRows[consoleScroll + i]);
+    }
+    if (maxStart > 0) {
+      spr.setTextColor(CLAUDE_ORANGE, p.bg);
+      spr.setCursor(W - 42, responseY + 4);
+      spr.printf("%u/%u", consoleScroll + 1, maxStart + 1);
+    }
+  }
+
+  spr.drawRoundRect(4, promptY, W - 8, promptH, 3,
+                    promptSelected ? USER_GRAY : p.textDim);
+  spr.setTextColor(USER_GRAY, p.bg);
+  spr.setCursor(10, promptY + 4);
+  spr.print(sessionPromptEditing ? "Prompt typing" : "Prompt");
+  spr.setTextColor(p.textDim, p.bg);
+  if ((int32_t)(millis() - sessionToastUntilMs) < 0 && sessionToast[0]) {
+    spr.setCursor(W - 86, promptY + 4);
+    spr.print(sessionToast);
+  } else {
+    spr.setCursor(W - 116, promptY + 4);
+    spr.print("Up/Down select");
+  }
+  if (tama.promptId[0]) {
+    spr.setCursor(62, promptY + 4);
+    spr.printf("tool %.16s", tama.promptTool);
+    spr.setCursor(10, promptY + 16);
+    spr.printf("%.36s", tama.promptHint);
+  } else {
+    spr.setCursor(10, promptY + 17);
+    spr.print("> ");
+    const char* shown = sessionPrompt;
+    if (sessionPromptLen > 33) shown = sessionPrompt + sessionPromptLen - 33;
+    spr.setTextColor(sessionPromptLen ? p.text : p.textDim, p.bg);
+    if (sessionPromptLen) spr.printf("%.33s", shown);
+    else spr.print(sessionPromptEditing ? "" : "Enter to type");
+    if (sessionPromptEditing && (millis() / 350) % 2 == 0) {
+      int cursorX = 24 + (int)strlen(shown) * 6;
+      if (cursorX > W - 12) cursorX = W - 12;
+      spr.drawFastVLine(cursorX, promptY + 17, 8, USER_GRAY);
+    }
+    spr.drawFastHLine(24, promptY + promptH - 9, W - 42, p.textDim);
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(10, promptY + promptH - 8);
+    spr.print("Enter edit/act  Fn+Ent needs handler");
+  }
+  drawDecisionToast(p);
 }
 
 void drawHUD() {
@@ -1324,10 +1656,11 @@ void setup() {
   halImuInit();
   halBeepInit();
   halLedSet(0, 0, 0);   // make sure the LED isn't stuck on from a reset
-  applyBrightness();
   lastInteractMs = millis();
   statsLoad();
   settingsLoad();
+  brightLevel = settings().bright;
+  applyBrightness();
   prepareBtIdentity();
   startBt();
   petNameLoad();
@@ -1370,6 +1703,7 @@ void setup() {
 }
 
 void loop() {
+  halSetTextInputMode(sessionPromptEditing && consolePageActive());
   halUpdate();
   halBeepUpdate();
   t++;
@@ -1411,19 +1745,59 @@ void loop() {
     responseSent = false;
     if (tama.promptId[0]) {
       promptArrivedMs = millis();
+      sessionPromptEditing = false;
       wake();
       sfxAlert();       // prompt arrived
-      // Jump to the approval screen no matter what was open — drawApproval
-      // only runs from drawHUD which only runs in DISP_NORMAL.
+      // Jump to the approval screen no matter what was open.
+      promptReturnMode = (DisplayMode)displayMode;
+      promptInterruptedMode = true;
       displayMode = DISP_NORMAL;
       menuOpen = settingsOpen = resetOpen = petPickerOpen = false;
+      applyDisplayMode();
+      characterInvalidate();
+      if (buddyMode) buddyInvalidate();
+    } else if (promptInterruptedMode) {
+      displayMode = promptReturnMode;
+      promptInterruptedMode = false;
       applyDisplayMode();
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
     }
   }
 
-  bool inPrompt = tama.promptId[0] && !responseSent;
+  static uint16_t seenConsoleLineGen = 0;
+  static uint16_t seenConsoleAssistantGen = 0;
+  static char seenConsolePromptId[40] = "";
+  bool consoleChanged = false;
+  if (tama.lineGen != seenConsoleLineGen) {
+    seenConsoleLineGen = tama.lineGen;
+    consoleChanged = true;
+  }
+  if (strcmp(tama.promptId, seenConsolePromptId) != 0) {
+    strncpy(seenConsolePromptId, tama.promptId, sizeof(seenConsolePromptId) - 1);
+    seenConsolePromptId[sizeof(seenConsolePromptId) - 1] = 0;
+    consoleChanged = true;
+  }
+  if (tama.assistantGen != seenConsoleAssistantGen) {
+    seenConsoleAssistantGen = tama.assistantGen;
+    consoleChanged = true;
+    sessionAwaitingReply = false;
+    if (sessionSendPending) {
+      sessionSendPending = false;
+      sessionPromptLen = 0;
+      sessionPrompt[0] = 0;
+      markSessionToast("reply received");
+    }
+  }
+  if (consoleChanged) consoleScroll = 0;
+  if (sessionSendPending && millis() - sessionSendAtMs > 2500) {
+    sessionSendPending = false;
+    sessionAwaitingReply = false;
+    markSessionToast("no handler");
+  }
+
+  bool hasPrompt = tama.promptId[0];
+  bool inPrompt = hasPrompt && !responseSent;
 
   // Button-press wake. Track which button woke the screen so its full
   // press cycle (including long-press) is swallowed — you don't want
@@ -1472,6 +1846,7 @@ void loop() {
         snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"once\"}", tama.promptId);
         sendCmd(cmd);
         responseSent = true;
+        markDecision(true);
         uint32_t tookS = (millis() - promptArrivedMs) / 1000;
         statsOnApproval(tookS);
         sfxApprove();
@@ -1488,6 +1863,8 @@ void loop() {
         sfxNav();
         menuSel = (menuSel + 1) % MENU_N;
 #endif
+      } else if (!menuOpen && !settingsOpen && !resetOpen && consolePageActive()) {
+        // Enter is handled by HalKey::Approve on the Claude Session page.
       } else if (!menuOpen && !settingsOpen && !resetOpen) {
         sfxNav();
         displayMode = (displayMode + 1) % DISP_COUNT;
@@ -1507,6 +1884,7 @@ void loop() {
       snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"deny\"}", tama.promptId);
       sendCmd(cmd);
       responseSent = true;
+      markDecision(false);
       statsOnDenial();
       sfxDeny();
 #ifndef CARDPUTER_ADV
@@ -1520,6 +1898,8 @@ void loop() {
       sfxConfirm();
       menuConfirm();
 #endif
+    } else if (sessionPromptEditing && consolePageActive()) {
+      // Backspace/delete is handled by HalKey::Back while editing.
     } else if (!menuOpen && !settingsOpen && !resetOpen && displayMode == DISP_INFO) {
       sfxNav();
       infoPage = (infoPage + 1) % INFO_PAGES;
@@ -1529,7 +1909,8 @@ void loop() {
       applyDisplayMode();
     } else if (!menuOpen && !settingsOpen && !resetOpen) {
       sfxNav();
-      msgScroll = (msgScroll >= 30) ? 0 : msgScroll + 1;
+      if (consolePageActive()) consoleScroll = (consoleScroll >= 30) ? 0 : consoleScroll + 1;
+      else msgScroll = (msgScroll >= 30) ? 0 : msgScroll + 1;
     }
   }
 
@@ -1538,6 +1919,14 @@ void loop() {
   // is open; Left/Right flip pages in INFO/PET modes; Y/N answer pending
   // prompts directly; M opens the menu; G toggles demo mode. The Cardputer
   // has a hardware power slide switch, so no software power key.
+  char typed;
+  while (halPollTextChar(&typed)) {
+    if (sessionPromptEditing && consolePageActive()
+        && !menuOpen && !settingsOpen && !resetOpen && !petPickerOpen) {
+      sessionAppendChar(typed);
+    }
+  }
+
   while (true) {
     HalKey k = halPollKey();
     if (k == HalKey::None) break;
@@ -1555,6 +1944,7 @@ void loop() {
         snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"once\"}", tama.promptId);
         sendCmd(cmd);
         responseSent = true;
+        markDecision(true);
         uint32_t tookS = (millis() - promptArrivedMs) / 1000;
         statsOnApproval(tookS);
         sfxApprove();
@@ -1564,6 +1954,7 @@ void loop() {
         snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"deny\"}", tama.promptId);
         sendCmd(cmd);
         responseSent = true;
+        markDecision(false);
         statsOnDenial();
         sfxDeny();
       }
@@ -1579,6 +1970,85 @@ void loop() {
     // the next frame and triggers home-screen displayMode cycling.
     auto consumedEnter = [&]() { halBtnA().suppressPending(); };
     auto consumedDel   = [&]() { halBtnB().suppressPending(); };
+
+    if (sessionPromptEditing && consolePageActive()
+        && !menuOpen && !settingsOpen && !resetOpen && !petPickerOpen) {
+      if (k == HalKey::SendPrompt) {
+        sendSessionPrompt();
+        consumedEnter();
+        sfxConfirm();
+      } else if (k == HalKey::Approve) {
+        sessionPromptEditing = false;
+        markSessionToast("editing off");
+        consumedEnter();
+        sfxConfirm();
+      } else if (k == HalKey::Back) {
+        sessionDeleteChar();
+        consumedDel();
+        sfxNav();
+      } else if (k == HalKey::Tab) {
+        switchMajorTab();
+        sfxNav();
+      }
+      continue;
+    }
+
+    if (consolePageActive() && !menuOpen && !settingsOpen && !resetOpen && !petPickerOpen) {
+      if (k == HalKey::Up) {
+        if (sessionClaudeExpanded && sessionFocus == 0) {
+          if (consoleScroll > 0) consoleScroll--;
+        } else {
+          sessionFocus = 0;
+          sessionPromptEditing = false;
+          consoleScroll = 0;
+        }
+        sfxNav();
+        continue;
+      }
+      if (k == HalKey::Down) {
+        if (sessionClaudeExpanded && sessionFocus == 0) {
+          consoleScroll = (consoleScroll >= 30) ? 30 : consoleScroll + 1;
+        } else {
+          sessionFocus = 1;
+          sessionPromptEditing = false;
+          consoleScroll = 0;
+        }
+        sfxNav();
+        continue;
+      }
+      if (k == HalKey::Approve) {
+        if (sessionFocus == 0) {
+          sessionClaudeExpanded = !sessionClaudeExpanded;
+          consoleScroll = 0;
+          markSessionToast(sessionClaudeExpanded ? "expanded" : "compact");
+        } else {
+          sessionPromptEditing = true;
+          markSessionToast("typing");
+        }
+        consumedEnter();
+        sfxConfirm();
+        continue;
+      }
+      if (k == HalKey::SendPrompt) {
+        sendSessionPrompt();
+        consumedEnter();
+        sfxConfirm();
+        continue;
+      }
+      if (k == HalKey::Alt) {
+        sessionFocus = 0;
+        sessionClaudeExpanded = !sessionClaudeExpanded;
+        consoleScroll = 0;
+        markSessionToast(sessionClaudeExpanded ? "expanded" : "compact");
+        sfxConfirm();
+        continue;
+      }
+      if (k == HalKey::Tab) {
+        switchMajorTab();
+        sfxNav();
+        continue;
+      }
+    }
 
     // Pet picker overrides the modal checks below: the picker isn't a
     // modal that covers the canvas, so we drive its arrow-key behavior
@@ -1633,6 +2103,10 @@ void loop() {
         dataSetDemo(!dataDemo());
         sfxConfirm();
         break;
+      case HalKey::Tab:
+        switchMajorTab();
+        sfxNav();
+        break;
       case HalKey::Left:
         if      (displayMode == DISP_INFO) infoPage = (infoPage + INFO_PAGES - 1) % INFO_PAGES;
         else if (displayMode == DISP_PET)  petPage  = (petPage  + PET_PAGES  - 1) % PET_PAGES;
@@ -1665,7 +2139,7 @@ void loop() {
   // Show the clock when nothing is happening — bridge heartbeat alone
   // doesn't count as activity (it's the only way to get the RTC synced).
   bool clocking = displayMode == DISP_NORMAL
-               && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
+               && !menuOpen && !settingsOpen && !resetOpen && !hasPrompt
                && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
                && dataRtcValid() && _onUsb;
   if (clocking) clockUpdateOrient();
@@ -1716,7 +2190,7 @@ void loop() {
 #ifdef CARDPUTER_ADV
   suppressPet = suppressPet || displayMode == DISP_INFO
                             || displayMode == DISP_PET
-                            || inPrompt;
+                            || hasPrompt;
 #endif
   if (suppressPet) {
     // skip sprite render — face-down, powered off, landscape clock, or
@@ -1758,6 +2232,7 @@ void loop() {
     drawClock();
   } else if (!napping && !screenOff) {
     if (blePasskey()) drawPasskey();
+    else if (hasPrompt) drawApproval();
     else if (clocking) drawClock();
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();
