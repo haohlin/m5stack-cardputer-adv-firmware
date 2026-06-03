@@ -4,9 +4,10 @@ Standalone firmware for using the M5Stack Unit RFID2 on the Cardputer-Adv Grove
 port with owned MIFARE Classic 1K lab cards.
 
 This firmware initializes RFID2 at I2C address `0x28` on Grove pins `SDA=G2`
-and `SCL=G1`, then runs a manual, slot-based lab-card flow. It reads and writes
-only readable MIFARE Classic data blocks using the factory default key. It does
-not rewrite UID/block 0 and it does not write sector trailers or access bits.
+and `SCL=G1`, then runs a keyboard-driven, slot-based lab-card flow. It reads
+and writes only readable MIFARE Classic data blocks using the factory default
+key. It does not rewrite UID/block 0 and it does not write sector trailers or
+access bits.
 
 ## Hardware Baseline
 
@@ -17,12 +18,15 @@ Official M5Stack references line up with this repo:
 - Unit RFID2: WS1850S, 13.56MHz, ISO/IEC 14443 Type A/B, I2C at `0x28`.
 - Unit RFID/RFID2 Arduino tutorial: `MFRC522_I2C(0x28, -1)` and MIFARE Classic
   read/write examples.
+- Cardputer keyboard API: `M5Cardputer.begin(cfg, true)`,
+  `M5Cardputer.update()`, and `M5Cardputer.Keyboard.keysState()`.
 
 Relevant docs:
 
 - https://docs.m5stack.com/en/core/Cardputer-Adv
 - https://docs.m5stack.com/en/unit/rfid2
 - https://docs.m5stack.com/en/arduino/projects/unit/unit_rfid
+- https://docs.m5stack.com/en/arduino/m5cardputer/keyboard
 
 Release handover notes are in [HANDOVER.md](HANDOVER.md).
 
@@ -46,24 +50,34 @@ parts through PlatformIO's bundled `esptool.py` at 115200 baud and exits with a
 watchdog reset. On this Cardputer-Adv, PlatformIO's default upload/reset path can
 leave the device in ROM download mode or fail after a baud-rate switch.
 
-## On-Device Manual Flow
+## On-Device Keyboard Flow
 
 The firmware is screen-first and does not auto-read or auto-write just because a
-card is detected. A write needs explicit mode/slot selection and a second hold
+card is detected. A write needs explicit mode/slot selection and a second Enter
 confirmation.
 
 1. Flash the firmware.
-2. Wait for `RFID2 manual mode`.
-3. Short-click `BtnA` to cycle selections:
-   `READ Slot 1`, `WRITE Slot 1`, `READ Slot 2`, `WRITE Slot 2`, up to slot 4.
-4. For read mode, place the source card and long-press `BtnA`.
-5. If the selected read slot already has saved data, long-press once to arm
-   overwrite, then long-press again within 8 seconds to replace that slot.
-6. For write mode, select the saved slot/version, place the destination card,
-   long-press once to arm, then long-press again within 8 seconds to write.
+2. Wait for `RFID2 keyboard UI`.
+3. Use left/right to choose `READ` or `WRITE`.
+4. Use up/down to choose slot 1-4.
+5. Place the source card and press Enter in `READ Slot N`.
+6. If the selected read slot already has saved data, press Enter once to arm
+   overwrite, then press Enter again within 8 seconds to replace that slot.
+7. In `WRITE Slot N vX`, place the destination card, press Enter once to arm,
+   then press Enter again within 8 seconds to write.
 
 Slots are RAM-only. Resetting or power-cycling the Cardputer clears the saved
 versions.
+
+Keyboard shortcuts:
+
+- Left/right: switch between read and write mode.
+- Up/down: choose slot.
+- `1`-`4`: jump to slot.
+- `R` / `W`: jump to read or write mode.
+- Enter: run selected read, arm write, or confirm armed action.
+- Backspace: arm/confirm clearing the selected slot.
+- Esc/backtick: cancel an armed action.
 
 Expected limitations:
 
@@ -153,10 +167,10 @@ Install OpenOCD if needed:
 
 ## Expected Screen Output
 
-- `RFID2 manual mode`: the unit was detected and is waiting for explicit
+- `RFID2 keyboard UI`: the unit was detected and is waiting for explicit
   selection.
-- `READ Slot N`: long-press `BtnA` with a source card present to save data.
-- `WRITE Slot N vX`: long-press once to arm, then long-press again to write
+- `READ Slot N`: press Enter with a source card present to save data.
+- `WRITE Slot N vX`: press Enter once to arm, then press Enter again to write
   saved version `X`.
 - `Read saved`: source lab card data blocks were saved to the selected slot.
 - `Write complete`: copyable readable blocks were written to the destination.

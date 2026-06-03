@@ -1,11 +1,11 @@
 #include <Arduino.h>
-#include <M5Unified.h>
+#include <M5Cardputer.h>
 #include <MFRC522_I2C.h>
 #include <Wire.h>
 
 namespace {
 constexpr char kFwName[] = "cardputer-rfid2-fw";
-constexpr char kFwVersion[] = "0.4.0-manual-slots";
+constexpr char kFwVersion[] = "0.5.0-keyboard-ui";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -53,11 +53,18 @@ enum class UiMode : uint8_t {
   Write = 1,
 };
 
+enum class PendingAction : uint8_t {
+  None = 0,
+  ReadOverwrite,
+  WriteSlot,
+  ClearSlot,
+};
+
 StoredDump storedDumps[kDumpSlotCount];
 UiMode selectedMode = UiMode::Read;
 uint8_t selectedSlot = 0;
 uint32_t nextDumpVersion = 1;
-bool operationArmed = false;
+PendingAction pendingAction = PendingAction::None;
 UiMode armedMode = UiMode::Read;
 uint8_t armedSlot = 0;
 uint32_t armedUntilMs = 0;
@@ -103,21 +110,30 @@ String selectedSummary() {
 }
 
 bool isArmedForSelection() {
-  return operationArmed && armedMode == selectedMode && armedSlot == selectedSlot &&
+  return pendingAction != PendingAction::None && armedMode == selectedMode && armedSlot == selectedSlot &&
+         (int32_t)(armedUntilMs - millis()) > 0;
+}
+
+bool isArmedAction(PendingAction action) {
+  return pendingAction == action && armedMode == selectedMode && armedSlot == selectedSlot &&
          (int32_t)(armedUntilMs - millis()) > 0;
 }
 
 void cancelArm() {
-  operationArmed = false;
+  pendingAction = PendingAction::None;
   armedUntilMs = 0;
 }
 
 void drawHome(const String& footer = "") {
-  String action = selectedMode == UiMode::Read ? "Hold BtnA: read" : "Hold BtnA: arm";
-  if (isArmedForSelection()) {
-    action = selectedMode == UiMode::Read ? "Hold again: overwrite" : "Hold again: write";
+  String action = selectedMode == UiMode::Read ? "Enter: read" : "Enter: arm write";
+  if (pendingAction == PendingAction::ReadOverwrite && isArmedForSelection()) {
+    action = "Enter: overwrite";
+  } else if (pendingAction == PendingAction::WriteSlot && isArmedForSelection()) {
+    action = "Enter: write";
+  } else if (pendingAction == PendingAction::ClearSlot && isArmedForSelection()) {
+    action = "Back: clear slot";
   }
-  drawLines("RFID2 manual mode", selectedSummary(), "Click BtnA: next", footer.length() ? footer : action);
+  drawLines("RFID2 keyboard UI", selectedSummary(), "</> mode  ^/v slot", footer.length() ? footer : action);
 }
 
 void setSelection(UiMode mode, uint8_t slot, const String& footer = "") {
@@ -136,11 +152,29 @@ void advanceSelection() {
   drawHome();
 }
 
-void armSelection() {
-  operationArmed = true;
+void armSelection(PendingAction action) {
+  pendingAction = action;
   armedMode = selectedMode;
   armedSlot = selectedSlot;
   armedUntilMs = millis() + kWriteArmWindowMs;
+}
+
+void selectSlot(uint8_t slot) {
+  selectedSlot = slot < kDumpSlotCount ? slot : 0;
+  cancelArm();
+  drawHome();
+}
+
+void moveSlot(int8_t delta) {
+  selectedSlot = (uint8_t)((selectedSlot + kDumpSlotCount + delta) % kDumpSlotCount);
+  cancelArm();
+  drawHome();
+}
+
+void toggleMode() {
+  selectedMode = selectedMode == UiMode::Read ? UiMode::Write : UiMode::Read;
+  cancelArm();
+  drawHome();
 }
 
 String uidToString() {
@@ -313,6 +347,16 @@ void emitStatus(const char* reason) {
   Serial.print(selectedSlot + 1);
   Serial.print(",\"armed\":");
   Serial.print(isArmedForSelection() ? "true" : "false");
+  Serial.print(",\"pending_action\":");
+  if (pendingAction == PendingAction::ReadOverwrite) {
+    printJsonString("read_overwrite");
+  } else if (pendingAction == PendingAction::WriteSlot) {
+    printJsonString("write");
+  } else if (pendingAction == PendingAction::ClearSlot) {
+    printJsonString("clear");
+  } else {
+    printJsonString("none");
+  }
   Serial.print('}');
   Serial.print(",\"slots\":[");
   for (uint8_t slot = 0; slot < kDumpSlotCount; ++slot) {
@@ -467,7 +511,7 @@ void emitStoredDump(uint8_t slot) {
 void clearSlot(uint8_t slot, bool redraw = true) {
   storedDumps[slot] = StoredDump();
   writeDone = false;
-  if (operationArmed && armedSlot == slot) cancelArm();
+  if (pendingAction != PendingAction::None && armedSlot == slot) cancelArm();
   emitMessage("clear", slotTitle(slot) + " cleared");
   if (redraw) drawHome(slotTitle(slot) + " cleared");
 }
@@ -746,10 +790,10 @@ int parseOptionalSlot(String tail, bool& confirmed) {
 
 void executeSelectedAction() {
   if (selectedMode == UiMode::Read) {
-    if (storedDumps[selectedSlot].valid && !isArmedForSelection()) {
-      armSelection();
-      emitMessage("armed", "overwrite armed for " + slotTitle(selectedSlot) + "; hold BtnA again within 8s");
-      drawLines("Overwrite armed", slotSummary(selectedSlot), "Hold BtnA again", "or click to cancel");
+    if (storedDumps[selectedSlot].valid && !isArmedAction(PendingAction::ReadOverwrite)) {
+      armSelection(PendingAction::ReadOverwrite);
+      emitMessage("armed", "overwrite armed for " + slotTitle(selectedSlot) + "; press Enter again within 8s");
+      drawLines("Overwrite armed", slotSummary(selectedSlot), "Enter again", "Esc/backtick cancels");
       return;
     }
     cancelArm();
@@ -763,10 +807,10 @@ void executeSelectedAction() {
     return;
   }
 
-  if (!isArmedForSelection()) {
-    armSelection();
-    emitMessage("armed", "write armed for " + slotSummary(selectedSlot) + "; hold BtnA again within 8s");
-    drawLines("Write armed", slotSummary(selectedSlot), "Hold BtnA again", "or click to cancel");
+  if (!isArmedAction(PendingAction::WriteSlot)) {
+    armSelection(PendingAction::WriteSlot);
+    emitMessage("armed", "write armed for " + slotSummary(selectedSlot) + "; press Enter again within 8s");
+    drawLines("Write armed", slotSummary(selectedSlot), "Enter again", "Esc/backtick cancels");
     return;
   }
 
@@ -774,16 +818,94 @@ void executeSelectedAction() {
   writeStoredDumpToPresentClassic1k(selectedSlot);
 }
 
-void handleButtonUi() {
-  if (operationArmed && (int32_t)(armedUntilMs - millis()) <= 0) {
+bool hasWord(const Keyboard_Class::KeysState& status, char a, char b = '\0') {
+  for (char c : status.word) {
+    if (c == a || (b && c == b)) return true;
+  }
+  return false;
+}
+
+void clearSelectedSlotAction() {
+  if (!storedDumps[selectedSlot].valid) {
+    drawHome(slotTitle(selectedSlot) + " already empty");
+    emitMessage("clear", slotTitle(selectedSlot) + " already empty");
+    return;
+  }
+
+  if (!isArmedAction(PendingAction::ClearSlot)) {
+    armSelection(PendingAction::ClearSlot);
+    emitMessage("armed", "clear armed for " + slotSummary(selectedSlot) + "; press Backspace again within 8s");
+    drawLines("Clear armed", slotSummary(selectedSlot), "Back again", "Esc/backtick cancels");
+    return;
+  }
+
+  clearSlot(selectedSlot);
+}
+
+void handleKeyboardUi() {
+  if (pendingAction != PendingAction::None && (int32_t)(armedUntilMs - millis()) <= 0) {
     cancelArm();
     drawHome("Arm expired");
   }
 
-  if (M5.BtnA.wasHold()) {
+  if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) {
+    return;
+  }
+
+  Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+
+  if (hasWord(status, '`', '~')) {
+    cancelArm();
+    drawHome("Cancelled");
+    return;
+  }
+
+  if (status.del) {
+    clearSelectedSlotAction();
+    return;
+  }
+
+  if (status.enter) {
     executeSelectedAction();
-  } else if (M5.BtnA.wasClicked()) {
-    advanceSelection();
+    return;
+  }
+
+  if (hasWord(status, ',', '<')) {
+    toggleMode();
+    return;
+  }
+
+  if (hasWord(status, '/', '?')) {
+    toggleMode();
+    return;
+  }
+
+  if (hasWord(status, ';', ':')) {
+    moveSlot(-1);
+    return;
+  }
+
+  if (hasWord(status, '.', '>')) {
+    moveSlot(1);
+    return;
+  }
+
+  if (hasWord(status, 'r', 'R')) {
+    setSelection(UiMode::Read, selectedSlot);
+    return;
+  }
+
+  if (hasWord(status, 'w', 'W')) {
+    setSelection(UiMode::Write, selectedSlot);
+    return;
+  }
+
+  for (uint8_t slot = 0; slot < kDumpSlotCount; ++slot) {
+    const char key = (char)('1' + slot);
+    if (hasWord(status, key)) {
+      selectSlot(slot);
+      return;
+    }
   }
 }
 
@@ -959,7 +1081,7 @@ void setup() {
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;
   cfg.fallback_board = m5::board_t::board_M5CardputerADV;
-  M5.begin(cfg);
+  M5Cardputer.begin(cfg, true);
   if (M5.Display.height() > M5.Display.width()) {
     M5.Display.setRotation(1);
   }
@@ -978,9 +1100,9 @@ void setup() {
 }
 
 void loop() {
-  M5.update();
+  M5Cardputer.update();
   pollSerialCommands();
-  handleButtonUi();
+  handleKeyboardUi();
 
   const uint32_t now = millis();
   if ((uint32_t)(now - lastStatusMs) >= kHeartbeatMs) {

@@ -3,15 +3,15 @@
 ## Release
 
 - Release name: latest stable / first release
-- Version: `0.4.0-manual-slots`
+- Version: `0.5.0-keyboard-ui`
 - Target hardware: M5Stack Cardputer-Adv with Unit RFID2 on the Grove port
 - Firmware environment: `cardputer-adv-rfid2`
 - Repo path: `/Users/haohanl/dev/cardputer-rfid2-fw`
 
 ## Current Firmware Summary
 
-This firmware is a manual, slot-based MIFARE Classic 1K lab-card reader/writer
-for the M5Stack Cardputer-Adv and Unit RFID2.
+This firmware is a keyboard-driven, slot-based MIFARE Classic 1K lab-card
+reader/writer for the M5Stack Cardputer-Adv and Unit RFID2.
 
 It initializes RFID2 at I2C address `0x28` on Grove pins:
 
@@ -34,17 +34,21 @@ FF FF FF FF FF FF
 - RFID2 I2C detection and status reporting.
 - Card detection preview with UID, SAK, and PICC type.
 - Manual on-device flow with no automatic write on card detection.
+- Official `M5Cardputer` keyboard input path.
 - Four RAM-only saved dump slots.
 - Version number assigned to each successful saved read.
 - Device UI state:
   - `READ Slot N`
   - `WRITE Slot N vX`
   - armed write/overwrite state with 8 second confirmation window
-- One-button device controls:
-  - short press `BtnA`: cycle mode/slot
-  - long press `BtnA` in read mode: read selected slot
-  - long press `BtnA` in write mode: arm write
-  - second long press within 8 seconds: execute write
+- Keyboard controls:
+  - left/right: switch read/write mode
+  - up/down: choose slot
+  - `1`-`4`: jump to slot
+  - `R` / `W`: jump to read/write mode
+  - Enter: run or confirm selected action
+  - Backspace: arm/confirm selected-slot clear
+  - Esc/backtick: cancel armed action
 - Read flow for MIFARE Classic 1K sectors authenticating with default Key A.
 - Write flow for stored normal data blocks only.
 - Serial command interface:
@@ -79,16 +83,18 @@ Verified on the connected Cardputer-Adv at `/dev/cu.usbmodem2101`:
 - Flash succeeded using `./scripts/flash_cardputer_adv.sh /dev/cu.usbmodem2101`.
 - Device reported:
   - firmware `cardputer-rfid2-fw`
-  - version `0.4.0-manual-slots`
+  - version `0.5.0-keyboard-ui`
   - `rfid_ready=true`
   - `i2c_scan=0X28`
   - selected UI state `READ Slot 1`
   - four empty slots after boot
 - `write 1` without confirmation was rejected.
 - `help` listed the manual-slot command surface.
+- Serial `mode` and `slot` commands updated the screen/UI state.
 - `watch_status.sh` displayed mode, selected slot, armed state, slot versions,
   and last-card state.
 - `jtag_pc_status.sh` mapped the program counter into app flash.
+- Physical key presses were not manually tapped during this verification run.
 
 ## What Was Not Implemented
 
@@ -108,7 +114,6 @@ Verified on the connected Cardputer-Adv at `/dev/cu.usbmodem2101`:
 - Persistent saved slots across reset/power-cycle.
 - SD card storage for dumps.
 - Multi-key dictionary configuration.
-- Cardputer keyboard input beyond `BtnA`.
 - Multi-device firmware targets beyond Cardputer-Adv.
 
 ## Important Current Code Paths
@@ -135,14 +140,15 @@ cd /Users/haohanl/dev/cardputer-rfid2-fw
 ## Manual Device Usage
 
 1. Boot the Cardputer.
-2. Wait for `RFID2 manual mode`.
-3. Short press `BtnA` to select `READ Slot N`.
-4. Place source card on RFID2.
-5. Long press `BtnA` to read into the selected slot.
-6. Short press `BtnA` to select `WRITE Slot N vX`.
-7. Place destination card on RFID2.
-8. Long press `BtnA` once to arm write.
-9. Long press `BtnA` again within 8 seconds to write.
+2. Wait for `RFID2 keyboard UI`.
+3. Use left/right to choose read or write mode.
+4. Use up/down or `1`-`4` to choose a slot.
+5. Place source card on RFID2.
+6. Press Enter in `READ Slot N` to read into the selected slot.
+7. Select `WRITE Slot N vX`.
+8. Place destination card on RFID2.
+9. Press Enter once to arm write.
+10. Press Enter again within 8 seconds to write.
 
 ## Serial Usage
 
@@ -194,8 +200,7 @@ Watch realtime status:
 - Block 0 and sector trailers are skipped by write operations.
 - Destination UID matching source UID is rejected in slot write mode.
 - `write-block` allows same-card edits only for normal data blocks.
-- M5Unified exposes `BtnA` as the usable generic button for this target in the
-  current dependency set.
+- Keyboard support uses the official M5Cardputer library.
 - The direct `esptool.py` flash flow is used because it reliably starts the app
   after flashing this Cardputer-Adv.
 - `graphify update .` was requested by workspace instructions, but `graphify`
