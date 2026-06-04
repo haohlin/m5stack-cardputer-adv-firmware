@@ -9,7 +9,7 @@
 
 namespace {
 constexpr char kFwName[] = "cardputer-rfid2-fw";
-constexpr char kFwVersion[] = "1.2.0";
+constexpr char kFwVersion[] = "1.3.0";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -125,6 +125,11 @@ UiMode armedMode = UiMode::Read;
 uint8_t armedSlot = 0;
 uint32_t armedUntilMs = 0;
 bool writeDone = false;
+
+// Auto-trigger guard: tracks the UID of the last card that triggered an
+// auto-read/auto-arm so holding the card steady doesn't re-trigger on every
+// poll. Reset whenever the user navigates (mode/slot change) or removes the card.
+String lastAutoTriggeredUid;
 
 // Last-seen status bar values — if any change the bar redraws in real-time.
 struct StatusCache {
@@ -255,6 +260,10 @@ void cancelArm() {
   armedUntilMs = 0;
 }
 
+void resetAutoTrigger() {
+  lastAutoTriggeredUid = "";
+}
+
 void applyBrightness() {
   static const uint8_t lut[kBrightnessLevels] = {25, 70, 120, 180, 255};
   const uint8_t lvl = brightnessLevel < kBrightnessLevels ? brightnessLevel : kBrightnessLevels - 1;
@@ -280,15 +289,38 @@ struct StatusSnapshot {
   bool charging;     // inferred: plugged AND batLevel not at 100
 };
 
+// Battery level tracker for charging-direction detection (Cardputer-Adv has no
+// PMIC so isCharging() returns charge_unknown; charging is detected by observing
+// the battery level rising between two readings 4 s apart).
+namespace {
+  int8_t _batPrev = -1;
+  uint32_t _batPrevMs = 0;
+  bool _inferredCharging = false;
+}
+
 StatusSnapshot readStatus() {
   StatusSnapshot s;
   s.usbPlugged  = Serial.isPlugged();
   s.usbCdc      = Serial.isConnected();
   s.batLevel    = (int8_t)M5.Power.getBatteryLevel();
-  // Cardputer-Adv has no PMIC so isCharging() returns charge_unknown.
-  // Best we can do: charge is happening whenever USB is plugged and the
-  // battery is not already reporting 100%.
-  s.charging    = s.usbPlugged && (s.batLevel < 0 || s.batLevel < 100);
+
+  // Update the charging inference every ~4 s.
+  const uint32_t now = millis();
+  if (_batPrev < 0) {
+    _batPrev = s.batLevel;
+    _batPrevMs = now;
+  } else if ((uint32_t)(now - _batPrevMs) >= 4000) {
+    if (s.batLevel > _batPrev) {
+      _inferredCharging = true;
+    } else if (s.batLevel < _batPrev || !s.usbPlugged) {
+      _inferredCharging = false;
+    }
+    _batPrev = s.batLevel;
+    _batPrevMs = now;
+  }
+  // Also show charging if USB is plugged and battery < 100 (covers the initial
+  // period before the first 4 s reading, and USB-power-bank type chargers).
+  s.charging = _inferredCharging || (s.usbPlugged && s.batLevel >= 0 && s.batLevel < 100);
   return s;
 }
 
@@ -552,6 +584,7 @@ void setSelection(UiMode mode, uint8_t slot, const String& footer = "") {
   selectedMode = mode;
   selectedSlot = slot < kDumpSlotCount ? slot : 0;
   cancelArm();
+  resetAutoTrigger();
   drawHome(footer);
 }
 
@@ -574,12 +607,14 @@ void armSelection(PendingAction action) {
 void selectSlot(uint8_t slot) {
   selectedSlot = slot < kDumpSlotCount ? slot : 0;
   cancelArm();
+  resetAutoTrigger();
   drawHome();
 }
 
 void moveSlot(int8_t delta) {
   selectedSlot = (uint8_t)((selectedSlot + kDumpSlotCount + delta) % kDumpSlotCount);
   cancelArm();
+  resetAutoTrigger();
   drawHome();
 }
 
@@ -587,6 +622,7 @@ void cycleMode(int8_t delta) {
   const int8_t next = ((int8_t)selectedMode + delta + kUiModeCount) % kUiModeCount;
   selectedMode = (UiMode)next;
   cancelArm();
+  resetAutoTrigger();
   drawHome();
 }
 
@@ -1881,13 +1917,22 @@ void handleKeyboardUi() {
 
 void pollCardPreview() {
   if (!rfidReady) return;
-  if (!wakeAndSelectCard()) return;
+  if (!wakeAndSelectCard()) {
+    // Card lifted — reset auto-trigger so placing the same card again re-triggers.
+    if (lastCard.valid) {
+      lastCard.valid = false;
+      resetAutoTrigger();
+      if (!resultScreenActive) drawHome();
+    }
+    return;
+  }
 
   const uint32_t now = millis();
   const uint8_t piccType = rfid.PICC_GetType(rfid.uid.sak);
   const String uid = uidToString();
   const String typeName = rfid.PICC_GetTypeName(piccType);
-  const bool shouldReport = !lastCard.valid || uid != lastCard.uid || (uint32_t)(now - lastCard.seenAtMs) > 5000;
+  const bool isNewCard = !lastCard.valid || uid != lastCard.uid;
+  const bool shouldReport = isNewCard || (uint32_t)(now - lastCard.seenAtMs) > 5000;
 
   lastCard.valid = true;
   lastCard.uid = uid;
@@ -1906,14 +1951,55 @@ void pollCardPreview() {
     printJsonString(typeName);
     Serial.println('}');
     Serial.flush();
-
-    // The live card UID and the armed action both render inside the HUD, so a
-    // plain refresh keeps everything (mode, slot, card, action bar) consistent.
-    // But never repaint over a result/notice screen (read/write/clone outcome) —
-    // the user keeps that until they press a navigation key.
-    if (!resultScreenActive) drawHome();
   }
 
+  // Auto-trigger: when a new card is placed, immediately start the appropriate
+  // action without waiting for Enter — only prompt confirmation when it would
+  // overwrite existing data. Guards against re-triggering while holding the card.
+  const bool alreadyTriggered = (uid == lastAutoTriggeredUid);
+  if (isNewCard && !alreadyTriggered && pendingAction == PendingAction::None) {
+    lastAutoTriggeredUid = uid;
+
+    if (selectedMode == UiMode::Read) {
+      if (storedDumps[selectedSlot].valid) {
+        // Slot occupied → arm overwrite prompt; user confirms with Enter or cancels.
+        armSelection(PendingAction::ReadOverwrite);
+        emitMessage("auto", "card detected; slot occupied — Enter=overwrite, `=keep");
+        drawLines("Slot has data", slotSummary(selectedSlot), "Enter: OVERWRITE", "`: keep existing");
+        // Card left selected; arm window ticks down; user presses Enter to read.
+        rfid.PICC_HaltA();
+        rfid.PCD_StopCrypto1();
+        return;
+      } else {
+        // Slot empty → read immediately, no confirmation needed.
+        emitMessage("auto", "card detected; reading into " + slotTitle(selectedSlot));
+        // Card is already selected from wakeAndSelectCard(); storeSelectedClassic1k
+        // operates on rfid.uid directly and handles HaltA internally.
+        storeSelectedClassic1k(selectedSlot);
+        return;
+      }
+    }
+
+    if (selectedMode == UiMode::Write && storedDumps[selectedSlot].valid) {
+      armSelection(PendingAction::WriteSlot);
+      emitMessage("auto", "card detected; write armed for " + slotSummary(selectedSlot) + " — Enter to confirm");
+      drawLines("Write armed", slotSummary(selectedSlot), "Enter: write to card", "`: cancel");
+      rfid.PICC_HaltA();
+      rfid.PCD_StopCrypto1();
+      return;
+    }
+
+    if (selectedMode == UiMode::Clone && storedDumps[selectedSlot].valid) {
+      armSelection(PendingAction::CloneSlot);
+      emitMessage("auto", "card detected; clone armed for " + slotSummary(selectedSlot) + " — Enter to confirm");
+      drawLines("Clone armed", slotSummary(selectedSlot), "Enter: CLONE incl UID", "`: cancel");
+      rfid.PICC_HaltA();
+      rfid.PCD_StopCrypto1();
+      return;
+    }
+  }
+
+  if (!resultScreenActive) drawHome();
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 }
