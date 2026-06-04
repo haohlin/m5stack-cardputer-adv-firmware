@@ -2,10 +2,13 @@
 #include <M5Cardputer.h>
 #include <MFRC522_I2C.h>
 #include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <FS.h>
 
 namespace {
 constexpr char kFwName[] = "cardputer-rfid2-fw";
-constexpr char kFwVersion[] = "0.5.0-keyboard-ui";
+constexpr char kFwVersion[] = "0.7.2-multisector-read-fix";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -17,7 +20,37 @@ constexpr size_t kCommandMax = 96;
 constexpr uint8_t kClassic1kBlocks = 64;
 constexpr uint8_t kClassic1kSectors = 16;
 constexpr uint8_t kClassicBlockSize = 16;
+constexpr uint8_t kClassicKeySize = 6;
 constexpr uint8_t kDumpSlotCount = 4;
+
+// microSD lives on the Cardputer-Adv SPI bus (see M5Unified _pin_table_sd):
+// CLK=40, CMD/MOSI=14, D0/MISO=39, D3/CS=12. No overlap with the RFID2 I2C
+// Grove pins (SDA=G2, SCL=G1).
+constexpr int kSdSckPin = 40;
+constexpr int kSdMosiPin = 14;
+constexpr int kSdMisoPin = 39;
+constexpr int kSdCsPin = 12;
+constexpr uint32_t kSdFrequencyHz = 4000000;
+constexpr char kSlotDir[] = "/rfid";
+constexpr char kKeyFilePath[] = "/rfid/keys.txt";
+
+// Multi-key dictionary: keys tried (as Key A and Key B) during read/write auth.
+constexpr uint8_t kMaxDictKeys = 24;
+
+// ---- UI palette (RGB565) -------------------------------------------------
+// "Tactical terminal" theme: near-black field, slate chrome, and a per-mode
+// accent (READ=green, WRITE=amber, CLONE=red because it rewrites the UID).
+constexpr uint16_t kColBg     = 0x0000;  // black field
+constexpr uint16_t kColBar    = 0x2104;  // dark slate chrome
+constexpr uint16_t kColText   = 0xFFFF;  // white
+constexpr uint16_t kColDim     = 0x738E;  // muted gray
+constexpr uint16_t kColRead    = 0x2FEC;  // green
+constexpr uint16_t kColWrite   = 0xFD20;  // amber
+constexpr uint16_t kColClone   = 0xF986;  // red/pink (destructive)
+constexpr uint16_t kColArmed   = 0xFFE0;  // yellow (action armed)
+constexpr uint16_t kColInfo    = 0x5D7F;  // cyan (data present)
+constexpr uint16_t kColOk      = 0x2FEC;  // green (success)
+constexpr int kGlyphW = 6;                // built-in font cell width at size 1
 
 MFRC522_I2C rfid(kRfidI2cAddress, kRfidResetPin);
 bool rfidReady = false;
@@ -41,22 +74,30 @@ struct StoredDump {
   String sourceUid;
   String sourceType;
   uint32_t storedAtMs = 0;
+  uint8_t sourceUidSize = 0;
   uint8_t blocksRead = 0;
   uint8_t sectorsRead = 0;
   uint8_t sectorsFailed = 0;
   bool readable[kClassic1kBlocks] = {};
   byte data[kClassic1kBlocks][kClassicBlockSize] = {};
+  // Per-sector Key A that successfully authenticated during the read. Used so a
+  // later write/clone can re-auth non-default-key cards and rebuild trailers.
+  bool keyKnown[kClassic1kSectors] = {};
+  byte keyA[kClassic1kSectors][kClassicKeySize] = {};
 };
 
 enum class UiMode : uint8_t {
   Read = 0,
   Write = 1,
+  Clone = 2,
 };
+constexpr uint8_t kUiModeCount = 3;
 
 enum class PendingAction : uint8_t {
   None = 0,
   ReadOverwrite,
   WriteSlot,
+  CloneSlot,
   ClearSlot,
 };
 
@@ -70,20 +111,87 @@ uint8_t armedSlot = 0;
 uint32_t armedUntilMs = 0;
 bool writeDone = false;
 
+// True while a full-screen result/notice (drawLines) is showing. The live card
+// preview must not repaint the home HUD over it, or read/write results would
+// vanish within ~50ms. Cleared as soon as the home HUD is drawn (any navigation
+// keypress), which resumes the live preview.
+bool resultScreenActive = false;
+
+// Multi-key dictionary, seeded in setup() with well-known public default keys.
+byte dictKeys[kMaxDictKeys][kClassicKeySize] = {};
+uint8_t dictKeyCount = 0;
+
+// microSD presence; when false the firmware still runs fully with RAM-only slots.
+bool sdReady = false;
+// IMPORTANT: the Cardputer-Adv DISPLAY owns SPI3_HOST (Arduino HSPI) — see M5GFX
+// autodetect (bus_cfg.spi_host = SPI3_HOST for board_M5CardputerADV). The microSD
+// MUST therefore use the other host, FSPI (SPI2_HOST); using HSPI here collides
+// with the panel bus and makes SD.begin() fail.
+SPIClass sdSpi(FSPI);
+
+// CLONE writes sector trailers (access bits + keys) when enabled. Off by default
+// because, like the community MFRC522 cloners, trailer writes are risky: a bad
+// access-bit pattern can permanently lock a sector. Reconstructed trailers reuse
+// the known working Key A so the destination stays accessible.
+bool cloneWriteTrailers = false;
+
+// Picks a banner accent from result-screen keywords so success/failure/armed
+// states read at a glance without the caller passing a color.
+uint16_t bannerAccentFor(const String& title) {
+  String t = title;
+  t.toLowerCase();
+  if (t.indexOf("fail") >= 0 || t.indexOf("block") >= 0 || t.indexOf("unsupported") >= 0 || t.indexOf("not ") >= 0) return kColClone;
+  if (t.indexOf("armed") >= 0 || t.indexOf("has data") >= 0) return kColArmed;
+  if (t.indexOf("clone") >= 0) return kColClone;
+  if (t.indexOf("saved") >= 0 || t.indexOf("complete") >= 0 || t.indexOf("written") >= 0) return kColOk;
+  return kColInfo;
+}
+
+void drawBanner(const String& title, uint16_t accent) {
+  auto& d = M5.Display;
+  d.fillRect(0, 0, d.width(), 16, accent);
+  d.fillRect(0, 16, d.width(), 2, kColBg);
+  d.setTextSize(1);
+  d.setTextColor(kColBg, accent);
+  d.setCursor(5, 4);
+  d.print(title);
+}
+
+// Full-screen transient result/notice screen: accent banner + up to 3 body lines.
 void drawLines(const char* title, const String& line1 = "", const String& line2 = "", const String& line3 = "") {
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setCursor(0, 0);
-  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Display.setTextSize(1);
-  M5.Display.println(title);
-  M5.Display.println();
-  if (line1.length()) M5.Display.println(line1);
-  if (line2.length()) M5.Display.println(line2);
-  if (line3.length()) M5.Display.println(line3);
+  auto& d = M5.Display;
+  d.fillScreen(kColBg);
+  resultScreenActive = true;
+  drawBanner(title, bannerAccentFor(title));
+  d.setTextSize(1);
+  int y = 26;
+  const String lines[3] = {line1, line2, line3};
+  for (const String& line : lines) {
+    if (line.length()) {
+      d.setTextColor(kColText, kColBg);
+      d.setCursor(6, y);
+      d.print(line);
+    }
+    y += 13;
+  }
 }
 
 const char* modeName(UiMode mode) {
-  return mode == UiMode::Read ? "READ" : "WRITE";
+  switch (mode) {
+    case UiMode::Read: return "READ";
+    case UiMode::Write: return "WRITE";
+    case UiMode::Clone: return "CLONE";
+  }
+  return "READ";
+}
+
+uint16_t accentForMode(UiMode mode) {
+  switch (mode) {
+    case UiMode::Read: return kColRead;
+    case UiMode::Write: return kColWrite;
+    case UiMode::Clone: return kColClone;
+  }
+  return kColText;
 }
 
 String slotTitle(uint8_t slot) {
@@ -124,16 +232,121 @@ void cancelArm() {
   armedUntilMs = 0;
 }
 
+// Home HUD: status bar, mode tabs, slot strip, content panel, and a contextual
+// action bar. Mode accent (green/amber/red) and the yellow "armed" bar make the
+// current state and the next keypress obvious at a glance on the 240x135 screen.
 void drawHome(const String& footer = "") {
-  String action = selectedMode == UiMode::Read ? "Enter: read" : "Enter: arm write";
-  if (pendingAction == PendingAction::ReadOverwrite && isArmedForSelection()) {
-    action = "Enter: overwrite";
-  } else if (pendingAction == PendingAction::WriteSlot && isArmedForSelection()) {
-    action = "Enter: write";
-  } else if (pendingAction == PendingAction::ClearSlot && isArmedForSelection()) {
-    action = "Back: clear slot";
+  const bool armed = isArmedForSelection();
+  String action;
+  switch (selectedMode) {
+    case UiMode::Read: action = "ENTER read into slot"; break;
+    case UiMode::Write: action = "ENTER arm write"; break;
+    case UiMode::Clone: action = "ENTER arm CLONE (UID)"; break;
   }
-  drawLines("RFID2 keyboard UI", selectedSummary(), "</> mode  ^/v slot", footer.length() ? footer : action);
+  if (pendingAction == PendingAction::ReadOverwrite && armed) {
+    action = "ENTER overwrite  ESC keep";
+  } else if (pendingAction == PendingAction::WriteSlot && armed) {
+    action = "ENTER confirm write";
+  } else if (pendingAction == PendingAction::CloneSlot && armed) {
+    action = "ENTER CLONE incl UID!";
+  } else if (pendingAction == PendingAction::ClearSlot && armed) {
+    action = "DEL confirm clear";
+  }
+
+  auto& d = M5.Display;
+  const int W = d.width();
+  const int H = d.height();
+  const uint16_t accent = accentForMode(selectedMode);
+  d.fillScreen(kColBg);
+  resultScreenActive = false;
+  d.setTextSize(1);
+
+  // Status bar: RFID link on the left; SD/RAM + key count + trailer flag right.
+  d.fillRect(0, 0, W, 13, kColBar);
+  d.setTextColor(rfidReady ? kColOk : kColClone, kColBar);
+  d.setCursor(4, 3);
+  d.print(rfidReady ? "RFID2" : "NO RF");
+  String right = String(sdReady ? "SD" : "RAM") + " K" + String(dictKeyCount);
+  if (cloneWriteTrailers) right += " TRL";
+  d.setTextColor(kColText, kColBar);
+  d.setCursor(W - (int)right.length() * kGlyphW - 4, 3);
+  d.print(right);
+
+  // Mode tabs: READ / WRITE / CLONE, active one filled with its accent.
+  const int tabsY = 18, tabsH = 15;
+  const int tabW = W / kUiModeCount;
+  for (uint8_t i = 0; i < kUiModeCount; ++i) {
+    const char* nm = modeName((UiMode)i);
+    const uint16_t acc = accentForMode((UiMode)i);
+    const int x = i * tabW;
+    if ((uint8_t)selectedMode == i) {
+      d.fillRect(x + 2, tabsY, tabW - 4, tabsH, acc);
+      d.setTextColor(kColBg, acc);
+    } else {
+      d.drawRect(x + 2, tabsY, tabW - 4, tabsH, kColDim);
+      d.setTextColor(acc, kColBg);
+    }
+    d.setCursor(x + (tabW - (int)strlen(nm) * kGlyphW) / 2, tabsY + 4);
+    d.print(nm);
+  }
+
+  // Slot strip: filled = has data (cyan), empty = slate. Selected slot is boxed
+  // in the mode accent.
+  const int slotY = 38, slotH = 16;
+  const int slotW = W / kDumpSlotCount;
+  for (uint8_t s = 0; s < kDumpSlotCount; ++s) {
+    const int x = s * slotW;
+    const StoredDump& dd = storedDumps[s];
+    const uint16_t fill = dd.valid ? kColInfo : kColBar;
+    d.fillRect(x + 3, slotY, slotW - 6, slotH, fill);
+    if (selectedSlot == s) d.drawRect(x + 1, slotY - 2, slotW - 2, slotH + 4, accent);
+    d.setTextColor(dd.valid ? kColBg : kColDim, fill);
+    String lbl = String(s + 1);
+    if (dd.valid) lbl += "v" + String(dd.version);
+    d.setCursor(x + (slotW - (int)lbl.length() * kGlyphW) / 2, slotY + 4);
+    d.print(lbl);
+  }
+
+  // Content panel: mode+slot, dump stats, stored source UID, live card UID.
+  int y = 60;
+  const StoredDump& cur = storedDumps[selectedSlot];
+  d.setTextColor(accent, kColBg);
+  d.setCursor(4, y);
+  d.printf("%s  Slot %u", modeName(selectedMode), (unsigned)(selectedSlot + 1));
+  y += 12;
+  d.setTextColor(kColText, kColBg);
+  d.setCursor(4, y);
+  if (cur.valid) {
+    d.printf("v%u  %ub  %us/16", (unsigned)cur.version, (unsigned)cur.blocksRead, (unsigned)cur.sectorsRead);
+  } else {
+    d.print("empty - read a card");
+  }
+  y += 12;
+  d.setCursor(4, y);
+  if (cur.valid && cur.sourceUid.length()) {
+    d.setTextColor(kColDim, kColBg);
+    d.print("src " + cur.sourceUid);
+  }
+  y += 11;
+  d.setCursor(4, y);
+  if (lastCard.valid) {
+    d.setTextColor(kColInfo, kColBg);
+    d.print("card " + lastCard.uid);
+  } else {
+    d.setTextColor(kColDim, kColBg);
+    d.print("no card on reader");
+  }
+
+  // Action bar: yellow when an action is armed, otherwise the mode accent.
+  const int barY = H - 13;
+  const uint16_t hintCol = armed ? kColArmed : accent;
+  d.fillRect(0, barY, W, 13, hintCol);
+  d.setTextColor(kColBg, hintCol);
+  String hint = footer.length() ? footer : action;
+  const int maxChars = (W - 8) / kGlyphW;
+  if ((int)hint.length() > maxChars) hint = hint.substring(0, maxChars);
+  d.setCursor(4, barY + 3);
+  d.print(hint);
 }
 
 void setSelection(UiMode mode, uint8_t slot, const String& footer = "") {
@@ -144,10 +357,10 @@ void setSelection(UiMode mode, uint8_t slot, const String& footer = "") {
 }
 
 void advanceSelection() {
-  uint8_t index = selectedSlot * 2 + (selectedMode == UiMode::Write ? 1 : 0);
-  index = (index + 1) % (kDumpSlotCount * 2);
-  selectedSlot = index / 2;
-  selectedMode = (index % 2) ? UiMode::Write : UiMode::Read;
+  uint8_t index = selectedSlot * kUiModeCount + (uint8_t)selectedMode;
+  index = (index + 1) % (kDumpSlotCount * kUiModeCount);
+  selectedSlot = index / kUiModeCount;
+  selectedMode = (UiMode)(index % kUiModeCount);
   cancelArm();
   drawHome();
 }
@@ -171,8 +384,9 @@ void moveSlot(int8_t delta) {
   drawHome();
 }
 
-void toggleMode() {
-  selectedMode = selectedMode == UiMode::Read ? UiMode::Write : UiMode::Read;
+void cycleMode(int8_t delta) {
+  const int8_t next = ((int8_t)selectedMode + delta + kUiModeCount) % kUiModeCount;
+  selectedMode = (UiMode)next;
   cancelArm();
   drawHome();
 }
@@ -238,6 +452,17 @@ int parseHexNibble(char c) {
   return -1;
 }
 
+bool parseHexBytes(const String& hex, byte* out, size_t len) {
+  if (hex.length() != len * 2) return false;
+  for (size_t i = 0; i < len; ++i) {
+    const int hi = parseHexNibble(hex[i * 2]);
+    const int lo = parseHexNibble(hex[i * 2 + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out[i] = (byte)((hi << 4) | lo);
+  }
+  return true;
+}
+
 bool parseClassicBlockHex(String hex, byte out[kClassicBlockSize]) {
   hex.replace(" ", "");
   hex.replace(":", "");
@@ -253,10 +478,73 @@ bool parseClassicBlockHex(String hex, byte out[kClassicBlockSize]) {
   return true;
 }
 
-void setFactoryDefaultKey(MFRC522_I2C::MIFARE_Key& key) {
-  for (byte& keyByte : key.keyByte) {
-    keyByte = 0xFF;
+bool wakeAndSelectCard();  // defined below; needed by dictionary re-select
+
+bool keysEqual(const byte* a, const byte* b) {
+  return memcmp(a, b, kClassicKeySize) == 0;
+}
+
+String keyToHex(const byte* key) {
+  return bytesToHex(key, kClassicKeySize);
+}
+
+// Adds a key to the dictionary if there is room and it is not already present.
+bool dictAddKey(const byte* key) {
+  for (uint8_t i = 0; i < dictKeyCount; ++i) {
+    if (keysEqual(dictKeys[i], key)) return true;  // already present
   }
+  if (dictKeyCount >= kMaxDictKeys) return false;
+  memcpy(dictKeys[dictKeyCount], key, kClassicKeySize);
+  dictKeyCount++;
+  return true;
+}
+
+// Public well-known default MIFARE Classic keys. The all-FF factory key is added
+// first so default cards still authenticate on the very first try.
+void seedDefaultKeyDictionary() {
+  static const byte kSeedKeys[][kClassicKeySize] = {
+    {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},  // factory default
+    {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5},  // MAD / common
+    {0xD3, 0xF7, 0xD3, 0xF7, 0xD3, 0xF7},  // NDEF public
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // all zeros
+    {0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5},
+    {0x4D, 0x3A, 0x99, 0xC3, 0x51, 0xDD},
+    {0x1A, 0x98, 0x2C, 0x7E, 0x45, 0x9A},
+    {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF},
+    {0x71, 0x4C, 0x5C, 0x88, 0x6E, 0x97},
+    {0x58, 0x7E, 0xE5, 0xF9, 0x35, 0x0F},
+    {0xA0, 0x47, 0x8C, 0xC3, 0x90, 0x91},
+    {0x53, 0x3C, 0xB6, 0xC7, 0x23, 0xF6},
+    {0x8F, 0xD0, 0xA4, 0xF2, 0x56, 0xE9},
+  };
+  dictKeyCount = 0;
+  for (const auto& k : kSeedKeys) {
+    dictAddKey(k);
+  }
+}
+
+// Tries every dictionary key as Key A against the sector's first block. On
+// success the card is left authenticated for that sector and the working key is
+// copied to outKey. Caller must PCD_StopCrypto1() when finished with the sector.
+bool authenticateSectorWithDictionary(uint8_t firstBlock, byte outKey[kClassicKeySize]) {
+  MFRC522_I2C::MIFARE_Key key;
+  for (uint8_t i = 0; i < dictKeyCount; ++i) {
+    // Re-activate the card (HaltA->WUPA->Select) before EVERY auth attempt. On the
+    // WS1850S / MFRC522-clone reader, a prior sector's PCD_StopCrypto1() or a
+    // failed Crypto1 auth leaves the PICC unable to authenticate the next sector
+    // until it is re-selected. Without this, only sector 0 ever read: the correct
+    // key (FF) flaked once on sector N>0, the dictionary moved on, and FF was
+    // never retried. Re-selecting first gives every key a clean shot.
+    if (!wakeAndSelectCard()) return false;  // card genuinely gone
+    memcpy(key.keyByte, dictKeys[i], kClassicKeySize);
+    if (rfid.PCD_Authenticate(MFRC522_I2C::PICC_CMD_MF_AUTH_KEY_A, firstBlock, &key, &rfid.uid) ==
+        MFRC522_I2C::STATUS_OK) {
+      memcpy(outKey, dictKeys[i], kClassicKeySize);
+      return true;
+    }
+    rfid.PCD_StopCrypto1();
+  }
+  return false;
 }
 
 String scanI2cBus() {
@@ -277,6 +565,201 @@ String scanI2cBus() {
 bool hasRfid2OnBus() {
   Wire.beginTransmission(kRfidI2cAddress);
   return Wire.endTransmission() == 0;
+}
+
+// Wakes and selects whatever card is on the antenna, then leaves it ACTIVE and
+// ready for authentication. Uses WUPA (PICC_WakeupA) instead of REQA
+// (PICC_IsNewCardPresent) on purpose: the live preview poll halts the card with
+// PICC_HaltA() after every detection, and a halted card ignores REQA. WUPA wakes
+// cards in BOTH the IDLE and HALT states, so an explicit read/write right after a
+// preview poll reliably re-selects the same held card instead of reporting "no
+// card found".
+bool wakeAndSelectCard() {
+  if (!rfidReady) return false;
+  // Retry a few times: right after the preview poll's PICC_HaltA(), the first
+  // WUPA/Select can transiently fail before the PICC is ready. Without this the
+  // correct key (e.g. default FF) may be skipped on a sector and the whole read
+  // can fail intermittently even though the card is present and readable.
+  for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+    byte atqa[2] = {};
+    byte atqaSize = sizeof(atqa);
+    const byte wake = rfid.PICC_WakeupA(atqa, &atqaSize);
+    if ((wake == MFRC522_I2C::STATUS_OK || wake == MFRC522_I2C::STATUS_COLLISION) &&
+        rfid.PICC_Select(&rfid.uid) == MFRC522_I2C::STATUS_OK) {
+      return true;
+    }
+    rfid.PICC_HaltA();
+    delay(5);
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// microSD storage layer
+// ---------------------------------------------------------------------------
+
+String slotFilePath(uint8_t slot) {
+  return String(kSlotDir) + "/slot" + String(slot + 1) + ".dump";
+}
+
+bool initSdStorage() {
+  sdSpi.begin(kSdSckPin, kSdMisoPin, kSdMosiPin, kSdCsPin);
+  pinMode(kSdCsPin, OUTPUT);
+  digitalWrite(kSdCsPin, HIGH);
+  // Some microSD cards need a slower first handshake; try the normal speed, then
+  // fall back to a conservative rate before giving up.
+  const uint32_t freqs[] = {kSdFrequencyHz, 1000000};
+  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+    for (uint32_t f : freqs) {
+      if (SD.begin(kSdCsPin, sdSpi, f)) {
+        if (!SD.exists(kSlotDir)) SD.mkdir(kSlotDir);
+        sdReady = true;
+        return true;
+      }
+      SD.end();
+      delay(20);
+    }
+  }
+  sdReady = false;
+  return false;
+}
+
+// Persists one slot as a small text record. Key A per sector and every readable
+// block (including trailers) are stored so a reload can write/clone identically.
+bool saveSlotToSd(uint8_t slot) {
+  if (!sdReady) return false;
+  const StoredDump& dump = storedDumps[slot];
+  const String path = slotFilePath(slot);
+  if (!dump.valid) {
+    SD.remove(path);
+    return true;
+  }
+
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) return false;
+  f.printf("v %u\n", dump.version);
+  f.printf("uid %s\n", dump.sourceUid.c_str());
+  f.printf("uidsize %u\n", dump.sourceUidSize);
+  f.printf("type %s\n", dump.sourceType.c_str());
+  f.printf("counts %u %u %u\n", dump.blocksRead, dump.sectorsRead, dump.sectorsFailed);
+  for (uint8_t sector = 0; sector < kClassic1kSectors; ++sector) {
+    if (dump.keyKnown[sector]) {
+      f.printf("key %u %s\n", sector, bytesToHex(dump.keyA[sector], kClassicKeySize).c_str());
+    }
+  }
+  for (uint8_t block = 0; block < kClassic1kBlocks; ++block) {
+    if (dump.readable[block]) {
+      f.printf("blk %u %s\n", block, bytesToHex(dump.data[block], kClassicBlockSize).c_str());
+    }
+  }
+  f.close();
+  return true;
+}
+
+bool loadSlotFromSd(uint8_t slot) {
+  if (!sdReady) return false;
+  const String path = slotFilePath(slot);
+  if (!SD.exists(path)) return false;
+  File f = SD.open(path, FILE_READ);
+  if (!f) return false;
+
+  StoredDump dump;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (!line.length()) continue;
+    const int sp = line.indexOf(' ');
+    const String tag = sp < 0 ? line : line.substring(0, sp);
+    const String rest = sp < 0 ? "" : line.substring(sp + 1);
+    if (tag == "v") {
+      dump.version = (uint32_t)rest.toInt();
+    } else if (tag == "uid") {
+      dump.sourceUid = rest;
+    } else if (tag == "uidsize") {
+      dump.sourceUidSize = (uint8_t)rest.toInt();
+    } else if (tag == "type") {
+      dump.sourceType = rest;
+    } else if (tag == "counts") {
+      int a = 0, b = 0, c = 0;
+      sscanf(rest.c_str(), "%d %d %d", &a, &b, &c);
+      dump.blocksRead = (uint8_t)a;
+      dump.sectorsRead = (uint8_t)b;
+      dump.sectorsFailed = (uint8_t)c;
+    } else if (tag == "key") {
+      const int sp2 = rest.indexOf(' ');
+      if (sp2 > 0) {
+        const int sector = rest.substring(0, sp2).toInt();
+        const String hex = rest.substring(sp2 + 1);
+        if (sector >= 0 && sector < kClassic1kSectors && parseHexBytes(hex, dump.keyA[sector], kClassicKeySize)) {
+          dump.keyKnown[sector] = true;
+        }
+      }
+    } else if (tag == "blk") {
+      const int sp2 = rest.indexOf(' ');
+      if (sp2 > 0) {
+        const int block = rest.substring(0, sp2).toInt();
+        const String hex = rest.substring(sp2 + 1);
+        if (block >= 0 && block < kClassic1kBlocks && parseHexBytes(hex, dump.data[block], kClassicBlockSize)) {
+          dump.readable[block] = true;
+        }
+      }
+    }
+  }
+  f.close();
+  // Recompute counts from the actual parsed block data rather than trusting the
+  // 'counts' scalar, so a missing/truncated/externally-edited 'counts' line can't
+  // make a fully-parsed dump look empty (which would delete it on next save).
+  uint8_t br = 0;
+  for (uint8_t b = 0; b < kClassic1kBlocks; ++b) if (dump.readable[b]) br++;
+  dump.blocksRead = br;
+  uint8_t sr = 0, sf = 0;
+  for (uint8_t s = 0; s < kClassic1kSectors; ++s) {
+    bool any = false;
+    for (uint8_t o = 0; o < 4; ++o) if (dump.readable[s * 4 + o]) { any = true; break; }
+    if (any) sr++; else sf++;
+  }
+  dump.sectorsRead = sr;
+  dump.sectorsFailed = sf;
+  dump.valid = dump.blocksRead > 0;
+  storedDumps[slot] = dump;
+  if (dump.valid && dump.version >= nextDumpVersion) {
+    nextDumpVersion = dump.version + 1;
+  }
+  return dump.valid;
+}
+
+void loadAllSlotsFromSd() {
+  for (uint8_t slot = 0; slot < kDumpSlotCount; ++slot) {
+    loadSlotFromSd(slot);
+  }
+}
+
+bool saveKeysToSd() {
+  if (!sdReady) return false;
+  File f = SD.open(kKeyFilePath, FILE_WRITE);
+  if (!f) return false;
+  for (uint8_t i = 0; i < dictKeyCount; ++i) {
+    f.println(bytesToHex(dictKeys[i], kClassicKeySize));
+  }
+  f.close();
+  return true;
+}
+
+bool loadKeysFromSd() {
+  if (!sdReady || !SD.exists(kKeyFilePath)) return false;
+  File f = SD.open(kKeyFilePath, FILE_READ);
+  if (!f) return false;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() != kClassicKeySize * 2) continue;
+    byte key[kClassicKeySize];
+    if (parseHexBytes(line, key, kClassicKeySize)) {
+      dictAddKey(key);
+    }
+  }
+  f.close();
+  return true;
 }
 
 void printJsonString(const String& value) {
@@ -352,12 +835,20 @@ void emitStatus(const char* reason) {
     printJsonString("read_overwrite");
   } else if (pendingAction == PendingAction::WriteSlot) {
     printJsonString("write");
+  } else if (pendingAction == PendingAction::CloneSlot) {
+    printJsonString("clone");
   } else if (pendingAction == PendingAction::ClearSlot) {
     printJsonString("clear");
   } else {
     printJsonString("none");
   }
   Serial.print('}');
+  Serial.print(",\"sd_ready\":");
+  Serial.print(sdReady ? "true" : "false");
+  Serial.print(",\"key_count\":");
+  Serial.print(dictKeyCount);
+  Serial.print(",\"clone_trailers\":");
+  Serial.print(cloneWriteTrailers ? "true" : "false");
   Serial.print(",\"slots\":[");
   for (uint8_t slot = 0; slot < kDumpSlotCount; ++slot) {
     if (slot) Serial.print(',');
@@ -412,7 +903,7 @@ bool selectPresentCard(const char* operation) {
     return false;
   }
 
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
+  if (!wakeAndSelectCard()) {
     emitMessage("error", String(operation) + ": no card selected; lift and place card, then retry");
     drawLines(operation, "No card found", "Lift and place card", "then retry command");
     return false;
@@ -511,6 +1002,7 @@ void emitStoredDump(uint8_t slot) {
 void clearSlot(uint8_t slot, bool redraw = true) {
   storedDumps[slot] = StoredDump();
   writeDone = false;
+  if (sdReady) SD.remove(slotFilePath(slot));
   if (pendingAction != PendingAction::None && armedSlot == slot) cancelArm();
   emitMessage("clear", slotTitle(slot) + " cleared");
   if (redraw) drawHome(slotTitle(slot) + " cleared");
@@ -519,6 +1011,7 @@ void clearSlot(uint8_t slot, bool redraw = true) {
 void clearAllSlots() {
   for (uint8_t slot = 0; slot < kDumpSlotCount; ++slot) {
     storedDumps[slot] = StoredDump();
+    if (sdReady) SD.remove(slotFilePath(slot));
   }
   writeDone = false;
   cancelArm();
@@ -556,25 +1049,27 @@ void storeSelectedClassic1k(uint8_t slot) {
   nextDump.sourceUid = sourceUid;
   nextDump.sourceType = typeName;
   nextDump.storedAtMs = millis();
-
-  MFRC522_I2C::MIFARE_Key key;
-  setFactoryDefaultKey(key);
+  nextDump.sourceUidSize = rfid.uid.size;
 
   for (uint8_t sector = 0; sector < kClassic1kSectors; ++sector) {
     const uint8_t firstBlock = sector * 4;
-    byte status = rfid.PCD_Authenticate(MFRC522_I2C::PICC_CMD_MF_AUTH_KEY_A, firstBlock, &key, &rfid.uid);
-    if (status != MFRC522_I2C::STATUS_OK) {
+    byte sectorKey[kClassicKeySize];
+    if (!authenticateSectorWithDictionary(firstBlock, sectorKey)) {
       nextDump.sectorsFailed++;
-      emitBlockError("auth_read", sector, firstBlock, status);
+      emitBlockError("auth_read", sector, firstBlock, MFRC522_I2C::STATUS_ERROR);
       continue;
     }
+    memcpy(nextDump.keyA[sector], sectorKey, kClassicKeySize);
+    nextDump.keyKnown[sector] = true;
 
     bool sectorHadRead = false;
-    for (uint8_t offset = 0; offset < 3; ++offset) {
+    // Read all four blocks including the sector trailer (offset 3) so writes and
+    // clones can rebuild trailers (access bits + Key B) later.
+    for (uint8_t offset = 0; offset < 4; ++offset) {
       const uint8_t block = firstBlock + offset;
       byte buffer[18] = {};
       byte byteCount = sizeof(buffer);
-      status = rfid.MIFARE_Read(block, buffer, &byteCount);
+      byte status = rfid.MIFARE_Read(block, buffer, &byteCount);
       if (status == MFRC522_I2C::STATUS_OK) {
         memcpy(nextDump.data[block], buffer, kClassicBlockSize);
         nextDump.readable[block] = true;
@@ -587,6 +1082,7 @@ void storeSelectedClassic1k(uint8_t slot) {
     if (sectorHadRead) {
       nextDump.sectorsRead++;
     }
+    rfid.PCD_StopCrypto1();
   }
 
   rfid.PICC_HaltA();
@@ -595,11 +1091,15 @@ void storeSelectedClassic1k(uint8_t slot) {
   nextDump.valid = nextDump.blocksRead > 0;
   storedDumps[slot] = nextDump;
   writeDone = false;
+  const bool saved = nextDump.valid && saveSlotToSd(slot);
   emitStoredSummary("store", slot, storedDumps[slot], storedDumps[slot].valid ? "ok" : "no_blocks_read");
   if (storedDumps[slot].valid) {
-    drawLines("Read saved", slotTitle(slot) + " v" + String(storedDumps[slot].version), "Blocks: " + String(storedDumps[slot].blocksRead), "Click next / hold run");
+    drawLines("Read saved", slotTitle(slot) + " v" + String(storedDumps[slot].version),
+              "Blocks: " + String(storedDumps[slot].blocksRead) + "  Sec: " + String(storedDumps[slot].sectorsRead) + "/16",
+              sdReady ? (saved ? "Saved to SD" : "SD save FAILED") : "RAM only (no SD)");
   } else {
-    drawLines("Read failed", slotTitle(slot), "No readable blocks", "Default key only");
+    drawLines("Read failed", "Auth failed " + String(nextDump.sectorsFailed) + "/16 sectors",
+              "Card may use non-default keys", "Retry, or add keys (serial)");
   }
 }
 
@@ -635,9 +1135,6 @@ void writeStoredDumpToSelectedClassic1k(uint8_t slot) {
     return;
   }
 
-  MFRC522_I2C::MIFARE_Key key;
-  setFactoryDefaultKey(key);
-
   uint8_t blocksWritten = 0;
   uint8_t writeFailures = 0;
   for (uint8_t sector = 0; sector < kClassic1kSectors; ++sector) {
@@ -652,17 +1149,19 @@ void writeStoredDumpToSelectedClassic1k(uint8_t slot) {
     }
     if (!hasWork) continue;
 
-    byte status = rfid.PCD_Authenticate(MFRC522_I2C::PICC_CMD_MF_AUTH_KEY_A, firstBlock, &key, &rfid.uid);
-    if (status != MFRC522_I2C::STATUS_OK) {
+    // Authenticate the DESTINATION sector with the key dictionary (its current
+    // key, not the source's), so non-default destination cards can be written.
+    byte sectorKey[kClassicKeySize];
+    if (!authenticateSectorWithDictionary(firstBlock, sectorKey)) {
       writeFailures += 3;
-      emitBlockError("auth_write", sector, firstBlock, status);
+      emitBlockError("auth_write", sector, firstBlock, MFRC522_I2C::STATUS_ERROR);
       continue;
     }
 
     for (uint8_t offset = 0; offset < 3; ++offset) {
       const uint8_t block = firstBlock + offset;
       if (!dump.readable[block] || !isCopyableClassicDataBlock(block)) continue;
-      status = rfid.MIFARE_Write(block, dump.data[block], kClassicBlockSize);
+      byte status = rfid.MIFARE_Write(block, dump.data[block], kClassicBlockSize);
       if (status == MFRC522_I2C::STATUS_OK) {
         blocksWritten++;
       } else {
@@ -670,6 +1169,7 @@ void writeStoredDumpToSelectedClassic1k(uint8_t slot) {
         emitBlockError("write", sector, block, status);
       }
     }
+    rfid.PCD_StopCrypto1();
   }
 
   rfid.PICC_HaltA();
@@ -683,6 +1183,158 @@ void writeStoredDumpToSelectedClassic1k(uint8_t slot) {
 void writeStoredDumpToPresentClassic1k(uint8_t slot) {
   if (!selectPresentCard("write")) return;
   writeStoredDumpToSelectedClassic1k(slot);
+}
+
+// Builds a writable sector trailer from a stored dump: known Key A (the read key,
+// since Key A always reads back as zeros), the source access bits verbatim, and
+// the source Key B if it was readable (else fall back to the known Key A).
+void buildTrailerForWrite(const StoredDump& dump, uint8_t sector, byte out[kClassicBlockSize]) {
+  const uint8_t trailerBlock = sector * 4 + 3;
+  memcpy(&out[0], dump.keyA[sector], kClassicKeySize);          // Key A (bytes 0-5)
+  memcpy(&out[6], &dump.data[trailerBlock][6], 4);              // access bits + GPB (6-9)
+  bool keyBReadable = false;
+  for (uint8_t i = 10; i < 16; ++i) {
+    if (dump.data[trailerBlock][i] != 0x00) { keyBReadable = true; break; }
+  }
+  if (keyBReadable) {
+    memcpy(&out[10], &dump.data[trailerBlock][10], kClassicKeySize);  // Key B (10-15)
+  } else {
+    memcpy(&out[10], dump.keyA[sector], kClassicKeySize);            // fall back to Key A
+  }
+}
+
+// Full clone of a stored dump onto the present (magic) card: data blocks, then
+// the UID/block 0 via the library's gen1a backdoor (exact 16-byte copy) with a
+// MIFARE_SetUid() fallback for gen2/CUID cards. Sector trailers are written only
+// when cloneWriteTrailers is enabled. Block-0 write only works on magic cards;
+// normal cards reject it (expected, reported as a failure).
+void cloneStoredDumpToSelectedClassic1k(uint8_t slot) {
+  StoredDump& dump = storedDumps[slot];
+  if (!dump.valid) {
+    emitMessage("error", slotTitle(slot) + " is empty; read a source card first");
+    drawLines("Clone blocked", slotTitle(slot) + " empty", "Select READ first");
+    return;
+  }
+
+  const uint8_t piccType = rfid.PICC_GetType(rfid.uid.sak);
+  const String typeName = rfid.PICC_GetTypeName(piccType);
+  const String destUid = uidToString();
+  if (piccType != MFRC522_I2C::PICC_TYPE_MIFARE_1K) {
+    emitMessage("error", "clone supports MIFARE Classic 1K only; detected " + typeName);
+    drawLines("Clone unsupported", "Need MIFARE 1K", "Detected:", typeName);
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+    return;
+  }
+
+  uint8_t blocksWritten = 0;
+  uint8_t writeFailures = 0;
+  uint8_t trailersWritten = 0;
+  bool block0Written = false;
+  bool magicGen1 = false;
+
+  // 1) Data blocks (and optionally trailers), authenticating the destination
+  //    with the key dictionary so non-default magic cards still work.
+  for (uint8_t sector = 0; sector < kClassic1kSectors; ++sector) {
+    const uint8_t firstBlock = sector * 4;
+    bool hasWork = false;
+    for (uint8_t offset = 0; offset < 3; ++offset) {
+      const uint8_t block = firstBlock + offset;
+      if (block != 0 && dump.readable[block]) { hasWork = true; break; }
+    }
+    if (cloneWriteTrailers && dump.readable[firstBlock + 3] && dump.keyKnown[sector]) hasWork = true;
+    if (!hasWork) continue;
+
+    byte sectorKey[kClassicKeySize];
+    if (!authenticateSectorWithDictionary(firstBlock, sectorKey)) {
+      writeFailures += 3;
+      emitBlockError("auth_clone", sector, firstBlock, MFRC522_I2C::STATUS_ERROR);
+      continue;
+    }
+
+    for (uint8_t offset = 0; offset < 3; ++offset) {
+      const uint8_t block = firstBlock + offset;
+      if (block == 0 || !dump.readable[block]) continue;  // block 0 handled separately
+      const byte status = rfid.MIFARE_Write(block, dump.data[block], kClassicBlockSize);
+      if (status == MFRC522_I2C::STATUS_OK) {
+        blocksWritten++;
+      } else {
+        writeFailures++;
+        emitBlockError("clone", sector, block, status);
+      }
+    }
+
+    if (cloneWriteTrailers && dump.readable[firstBlock + 3] && dump.keyKnown[sector]) {
+      byte trailer[kClassicBlockSize];
+      buildTrailerForWrite(dump, sector, trailer);
+      const byte status = rfid.MIFARE_Write(firstBlock + 3, trailer, kClassicBlockSize);
+      if (status == MFRC522_I2C::STATUS_OK) {
+        trailersWritten++;
+      } else {
+        writeFailures++;
+        emitBlockError("clone_trailer", sector, firstBlock + 3, status);
+      }
+    }
+    rfid.PCD_StopCrypto1();
+  }
+
+  // 2) UID / block 0. Gen1a backdoor writes the exact 16-byte source block 0;
+  //    fall back to MIFARE_SetUid() (UID+BCC) for gen2/CUID cards.
+  if (dump.readable[0]) {
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+    if (wakeAndSelectCard() && rfid.MIFARE_OpenUidBackdoor(false)) {
+      magicGen1 = true;
+      block0Written = rfid.MIFARE_Write((byte)0, dump.data[0], kClassicBlockSize) == MFRC522_I2C::STATUS_OK;
+      if (block0Written) blocksWritten++;
+    } else if (wakeAndSelectCard()) {
+      // SetUid needs the SOURCE UID length, not the destination's. Default to 4
+      // for legacy/unknown dumps that predate sourceUidSize capture.
+      const byte uidLen = (dump.sourceUidSize == 7) ? 7 : 4;
+      block0Written = rfid.MIFARE_SetUid(dump.data[0], uidLen, false);
+      if (block0Written) blocksWritten++;
+    }
+    if (!block0Written) {
+      writeFailures++;
+      emitBlockError("clone_block0", 0, 0, MFRC522_I2C::STATUS_ERROR);
+    }
+  }
+
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+
+  emitEventPrefix("clone");
+  Serial.print(",\"result\":");
+  printJsonString(writeFailures == 0 ? "ok" : "partial");
+  Serial.print(",\"slot\":");
+  Serial.print(slot + 1);
+  Serial.print(",\"version\":");
+  Serial.print(dump.version);
+  Serial.print(",\"dest_uid\":");
+  printJsonString(destUid);
+  Serial.print(",\"magic_gen1\":");
+  Serial.print(magicGen1 ? "true" : "false");
+  Serial.print(",\"block0_written\":");
+  Serial.print(block0Written ? "true" : "false");
+  Serial.print(",\"blocks_written\":");
+  Serial.print(blocksWritten);
+  Serial.print(",\"trailers_written\":");
+  Serial.print(trailersWritten);
+  Serial.print(",\"write_failures\":");
+  Serial.print(writeFailures);
+  Serial.println('}');
+  Serial.flush();
+
+  writeDone = blocksWritten > 0;
+  drawLines(block0Written ? "Clone complete" : "Clone partial",
+            "UID " + String(block0Written ? (magicGen1 ? "copied" : "UID+BCC only") : "kept") + (magicGen1 ? " (gen1)" : ""),
+            "Blocks: " + String(blocksWritten) + (cloneWriteTrailers ? "  Trl: " + String(trailersWritten) : ""),
+            "Failures: " + String(writeFailures));
+}
+
+void cloneStoredDumpToPresentClassic1k(uint8_t slot) {
+  if (!selectPresentCard("clone")) return;
+  cloneStoredDumpToSelectedClassic1k(slot);
 }
 
 void writeLiteralDataBlock(const String& command) {
@@ -733,13 +1385,11 @@ void writeLiteralDataBlock(const String& command) {
     return;
   }
 
-  MFRC522_I2C::MIFARE_Key key;
-  setFactoryDefaultKey(key);
-
   const uint8_t sector = block / 4;
   const uint8_t firstBlock = sector * 4;
-  byte status = rfid.PCD_Authenticate(MFRC522_I2C::PICC_CMD_MF_AUTH_KEY_A, firstBlock, &key, &rfid.uid);
-  if (status == MFRC522_I2C::STATUS_OK) {
+  byte sectorKey[kClassicKeySize];
+  byte status = MFRC522_I2C::STATUS_ERROR;
+  if (authenticateSectorWithDictionary(firstBlock, sectorKey)) {
     status = rfid.MIFARE_Write(block, payload, kClassicBlockSize);
   }
 
@@ -789,33 +1439,53 @@ int parseOptionalSlot(String tail, bool& confirmed) {
 }
 
 void executeSelectedAction() {
-  if (selectedMode == UiMode::Read) {
-    if (storedDumps[selectedSlot].valid && !isArmedAction(PendingAction::ReadOverwrite)) {
-      armSelection(PendingAction::ReadOverwrite);
-      emitMessage("armed", "overwrite armed for " + slotTitle(selectedSlot) + "; press Enter again within 8s");
-      drawLines("Overwrite armed", slotSummary(selectedSlot), "Enter again", "Esc/backtick cancels");
+  switch (selectedMode) {
+    case UiMode::Read: {
+      // Reading into a slot that already holds data needs an explicit choice:
+      // Enter again to overwrite, or Esc/backtick to keep the existing dump.
+      if (storedDumps[selectedSlot].valid && !isArmedAction(PendingAction::ReadOverwrite)) {
+        armSelection(PendingAction::ReadOverwrite);
+        emitMessage("armed", "slot has data; Enter=overwrite, `=keep for " + slotTitle(selectedSlot));
+        drawLines("Slot has data", slotSummary(selectedSlot), "Enter: OVERWRITE", "`: keep existing");
+        return;
+      }
+      cancelArm();
+      storePresentClassic1k(selectedSlot);
       return;
     }
-    cancelArm();
-    storePresentClassic1k(selectedSlot);
-    return;
+    case UiMode::Write: {
+      if (!storedDumps[selectedSlot].valid) {
+        emitMessage("error", "write blocked: " + slotTitle(selectedSlot) + " is empty");
+        drawLines("Write blocked", slotTitle(selectedSlot) + " empty", "Read a slot first");
+        return;
+      }
+      if (!isArmedAction(PendingAction::WriteSlot)) {
+        armSelection(PendingAction::WriteSlot);
+        emitMessage("armed", "write armed for " + slotSummary(selectedSlot) + "; press Enter again within 8s");
+        drawLines("Write armed", slotSummary(selectedSlot), "Enter: confirm write", "`: cancel");
+        return;
+      }
+      cancelArm();
+      writeStoredDumpToPresentClassic1k(selectedSlot);
+      return;
+    }
+    case UiMode::Clone: {
+      if (!storedDumps[selectedSlot].valid) {
+        emitMessage("error", "clone blocked: " + slotTitle(selectedSlot) + " is empty");
+        drawLines("Clone blocked", slotTitle(selectedSlot) + " empty", "Read a slot first");
+        return;
+      }
+      if (!isArmedAction(PendingAction::CloneSlot)) {
+        armSelection(PendingAction::CloneSlot);
+        emitMessage("armed", "CLONE armed for " + slotSummary(selectedSlot) + " (rewrites UID+block0); Enter again within 8s");
+        drawLines("CLONE armed", slotSummary(selectedSlot), "Enter: CLONE incl UID", "needs MAGIC card");
+        return;
+      }
+      cancelArm();
+      cloneStoredDumpToPresentClassic1k(selectedSlot);
+      return;
+    }
   }
-
-  if (!storedDumps[selectedSlot].valid) {
-    emitMessage("error", "write blocked: " + slotTitle(selectedSlot) + " is empty");
-    drawLines("Write blocked", slotTitle(selectedSlot) + " empty", "Select READ first");
-    return;
-  }
-
-  if (!isArmedAction(PendingAction::WriteSlot)) {
-    armSelection(PendingAction::WriteSlot);
-    emitMessage("armed", "write armed for " + slotSummary(selectedSlot) + "; press Enter again within 8s");
-    drawLines("Write armed", slotSummary(selectedSlot), "Enter again", "Esc/backtick cancels");
-    return;
-  }
-
-  cancelArm();
-  writeStoredDumpToPresentClassic1k(selectedSlot);
 }
 
 bool hasWord(const Keyboard_Class::KeysState& status, char a, char b = '\0') {
@@ -835,7 +1505,7 @@ void clearSelectedSlotAction() {
   if (!isArmedAction(PendingAction::ClearSlot)) {
     armSelection(PendingAction::ClearSlot);
     emitMessage("armed", "clear armed for " + slotSummary(selectedSlot) + "; press Backspace again within 8s");
-    drawLines("Clear armed", slotSummary(selectedSlot), "Back again", "Esc/backtick cancels");
+    drawLines("Clear armed", slotSummary(selectedSlot), "Back again", "backtick cancels");
     return;
   }
 
@@ -871,12 +1541,12 @@ void handleKeyboardUi() {
   }
 
   if (hasWord(status, ',', '<')) {
-    toggleMode();
+    cycleMode(-1);
     return;
   }
 
   if (hasWord(status, '/', '?')) {
-    toggleMode();
+    cycleMode(1);
     return;
   }
 
@@ -900,6 +1570,11 @@ void handleKeyboardUi() {
     return;
   }
 
+  if (hasWord(status, 'c', 'C')) {
+    setSelection(UiMode::Clone, selectedSlot);
+    return;
+  }
+
   for (uint8_t slot = 0; slot < kDumpSlotCount; ++slot) {
     const char key = (char)('1' + slot);
     if (hasWord(status, key)) {
@@ -911,7 +1586,7 @@ void handleKeyboardUi() {
 
 void pollCardPreview() {
   if (!rfidReady) return;
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return;
+  if (!wakeAndSelectCard()) return;
 
   const uint32_t now = millis();
   const uint8_t piccType = rfid.PICC_GetType(rfid.uid.sak);
@@ -937,11 +1612,11 @@ void pollCardPreview() {
     Serial.println('}');
     Serial.flush();
 
-    if (isArmedForSelection()) {
-      drawLines("Card detected", "UID: " + uid, selectedSummary(), "Hold BtnA to run");
-    } else {
-      drawHome("Card: " + uid);
-    }
+    // The live card UID and the armed action both render inside the HUD, so a
+    // plain refresh keeps everything (mode, slot, card, action bar) consistent.
+    // But never repaint over a result/notice screen (read/write/clone outcome) —
+    // the user keeps that until they press a navigation key.
+    if (!resultScreenActive) drawHome();
   }
 
   rfid.PICC_HaltA();
@@ -973,8 +1648,11 @@ void processCommand(String command) {
     } else if (mode == "write") {
       setSelection(UiMode::Write, selectedSlot);
       emitStatus("mode");
+    } else if (mode == "clone") {
+      setSelection(UiMode::Clone, selectedSlot);
+      emitStatus("mode");
     } else {
-      emitMessage("error", "usage: mode read|write");
+      emitMessage("error", "usage: mode read|write|clone");
     }
   } else if (command == "slot") {
     emitSlots();
@@ -1024,6 +1702,60 @@ void processCommand(String command) {
     }
   } else if (command.startsWith("write-block ")) {
     writeLiteralDataBlock(command);
+  } else if (command == "clone" || command.startsWith("clone ")) {
+    bool confirmed = false;
+    const int parsedSlot = parseOptionalSlot(commandTail(command, "clone"), confirmed);
+    if (parsedSlot < 0) {
+      emitMessage("error", "usage: clone [slot 1-" + String(kDumpSlotCount) + "] confirm");
+    } else if (!confirmed) {
+      emitMessage("error", "clone rewrites UID/block 0 and needs a MAGIC card; confirm: clone " + String(parsedSlot + 1) + " confirm");
+      drawLines("Clone blocked", slotSummary((uint8_t)parsedSlot), "Serial needs confirm", "needs MAGIC card");
+    } else {
+      setSelection(UiMode::Clone, (uint8_t)parsedSlot);
+      cloneStoredDumpToPresentClassic1k((uint8_t)parsedSlot);
+    }
+  } else if (command == "keys") {
+    emitEventPrefix("keys");
+    Serial.print(",\"count\":");
+    Serial.print(dictKeyCount);
+    Serial.print(",\"keys\":[");
+    for (uint8_t i = 0; i < dictKeyCount; ++i) {
+      if (i) Serial.print(',');
+      printJsonString(keyToHex(dictKeys[i]));
+    }
+    Serial.println("]}");
+    Serial.flush();
+  } else if (command.startsWith("key add ")) {
+    String hex = commandTail(command, "key add");
+    hex.replace(" ", "");
+    hex.replace(":", "");
+    byte key[kClassicKeySize];
+    if (!parseHexBytes(hex, key, kClassicKeySize)) {
+      emitMessage("error", "key add needs 12 hex chars (6 bytes)");
+    } else if (!dictAddKey(key)) {
+      emitMessage("error", "key dictionary full (max " + String(kMaxDictKeys) + ")");
+    } else {
+      saveKeysToSd();
+      emitMessage("keys", "added key " + keyToHex(key) + "; count=" + String(dictKeyCount));
+    }
+  } else if (command == "key clear") {
+    dictKeyCount = 0;
+    saveKeysToSd();
+    emitMessage("keys", "dictionary cleared");
+  } else if (command == "key reset") {
+    seedDefaultKeyDictionary();
+    saveKeysToSd();
+    emitMessage("keys", "dictionary reset to defaults; count=" + String(dictKeyCount));
+  } else if (command == "trailers on") {
+    cloneWriteTrailers = true;
+    emitMessage("trailers", "clone will WRITE sector trailers (risky)");
+  } else if (command == "trailers off") {
+    cloneWriteTrailers = false;
+    emitMessage("trailers", "clone will skip sector trailers (safe)");
+  } else if (command == "trailers") {
+    emitMessage("trailers", cloneWriteTrailers ? "on (clone writes trailers)" : "off (clone skips trailers)");
+  } else if (command == "sd") {
+    emitMessage("sd", sdReady ? "microSD mounted; slots persist" : "no microSD; slots are RAM-only");
   } else if (command == "clear" || command.startsWith("clear ")) {
     String tail = commandTail(command, "clear");
     const bool confirmed = consumeConfirm(tail);
@@ -1049,7 +1781,7 @@ void processCommand(String command) {
   } else if (command == "version") {
     emitMessage("version", String(kFwName) + " " + kFwVersion);
   } else if (command == "help") {
-    emitMessage("help", "commands: status, slots, next, ui, mode read|write, slot <1-4>, scan, store [slot] [confirm], dump [slot], write [slot] confirm, write-block <block> <32hex>, clear [slot]|all confirm, reset-rfid, version, help");
+    emitMessage("help", "commands: status, slots, next, ui, mode read|write|clone, slot <1-4>, scan, store [slot] [confirm], dump [slot], write [slot] confirm, clone [slot] confirm, write-block <block> <32hex>, keys, key add <12hex>, key clear, key reset, trailers on|off, sd, clear [slot]|all confirm, reset-rfid, version, help");
   } else {
     emitMessage("error", "unknown command: " + command);
   }
@@ -1090,9 +1822,18 @@ void setup() {
   Wire.begin(kGroveSda, kGroveScl, kI2cFrequency);
   delay(100);
 
+  // Key dictionary first, then microSD: load persisted slots + any saved keys so
+  // they survive a power-cycle. Everything still works if no card is inserted.
+  seedDefaultKeyDictionary();
+  initSdStorage();
+  if (sdReady) {
+    loadKeysFromSd();
+    loadAllSlotsFromSd();
+  }
+
   refreshRfidStatus();
   if (rfidReady) {
-    drawHome("FW " + String(kFwVersion));
+    drawHome(String(sdReady ? "SD ok" : "no SD") + "  FW " + String(kFwVersion));
   } else {
     drawLines("RFID2 not found", "Check Grove cable", "SDA=G2 SCL=G1", "I2C: " + lastI2cScan);
   }

@@ -4,10 +4,22 @@ Standalone firmware for using the M5Stack Unit RFID2 on the Cardputer-Adv Grove
 port with owned MIFARE Classic 1K lab cards.
 
 This firmware initializes RFID2 at I2C address `0x28` on Grove pins `SDA=G2`
-and `SCL=G1`, then runs a keyboard-driven, slot-based lab-card flow. It reads
-and writes only readable MIFARE Classic data blocks using the factory default
-key. It does not rewrite UID/block 0 and it does not write sector trailers or
-access bits.
+and `SCL=G1`, then runs a keyboard-driven, slot-based lab-card flow with three
+modes — **READ**, **WRITE**, and **CLONE**. It authenticates sectors against a
+configurable **multi-key dictionary** (seeded with public defaults), captures
+the full card (all 16 sectors / 64 blocks when the keys are known), and persists
+slots to **microSD** with full **RAM-only fallback** when no card is inserted.
+
+- **WRITE** copies the readable data blocks to a destination card (no UID, no
+  trailers) — safe.
+- **CLONE** copies the data blocks **and** rewrites UID / block 0 via the gen1a
+  backdoor (`MIFARE_SetUid` fallback for gen2) — this needs a **magic /
+  UID-changeable card**. Sector-trailer (keys + access-bit) copying is available
+  but **off by default** (`trailers on`) because a bad access-bit write can
+  permanently brick a sector.
+
+Unknown (non-default) keys cannot be recovered (no Crypto1 cracking on this
+hardware) — see the cloning notes below and `CLAUDE.md`.
 
 ## Hardware Baseline
 
@@ -28,7 +40,7 @@ Relevant docs:
 - https://docs.m5stack.com/en/arduino/projects/unit/unit_rfid
 - https://docs.m5stack.com/en/arduino/m5cardputer/keyboard
 
-Release handover notes are in [HANDOVER.md](HANDOVER.md).
+Architecture, gotchas, and out-of-scope notes live in [CLAUDE.md](CLAUDE.md).
 
 ## Build
 
@@ -57,36 +69,79 @@ card is detected. A write needs explicit mode/slot selection and a second Enter
 confirmation.
 
 1. Flash the firmware.
-2. Wait for `RFID2 keyboard UI`.
-3. Use left/right to choose `READ` or `WRITE`.
-4. Use up/down to choose slot 1-4.
-5. Place the source card and press Enter in `READ Slot N`.
-6. If the selected read slot already has saved data, press Enter once to arm
-   overwrite, then press Enter again within 8 seconds to replace that slot.
-7. In `WRITE Slot N vX`, place the destination card, press Enter once to arm,
-   then press Enter again within 8 seconds to write.
+2. Wait for the HUD (status bar + READ/WRITE/CLONE tabs + slot strip).
+3. Cycle mode with `<`/`>` (READ → WRITE → CLONE), or jump with `R`/`W`/`C`.
+4. Choose slot 1-4 with `;`/`.` or the `1`-`4` keys.
+5. **READ**: place the source card, press Enter. The result shows
+   `Blocks/Sec` (e.g. `64b 16s/16` = full read). If the slot already has data,
+   Enter arms overwrite — Enter again to overwrite, backtick to keep.
+6. **WRITE**: select the slot, place the destination card, Enter to arm, Enter
+   again within 8 s to write the data blocks.
+7. **CLONE**: select the slot, place the destination card, Enter to arm, Enter
+   again to clone data + UID/block 0 (needs a magic card for the UID).
 
-Slots are RAM-only. Resetting or power-cycling the Cardputer clears the saved
-versions.
+Slots persist to microSD when a card is inserted; otherwise they are RAM-only
+and clear on reset/power-cycle.
 
 Keyboard shortcuts:
 
-- Left/right: switch between read and write mode.
-- Up/down: choose slot.
-- `1`-`4`: jump to slot.
-- `R` / `W`: jump to read or write mode.
-- Enter: run selected read, arm write, or confirm armed action.
-- Backspace: arm/confirm clearing the selected slot.
-- Esc/backtick: cancel an armed action.
+- `<` / `>`: cycle mode (READ / WRITE / CLONE).
+- `;` / `.`: choose slot. `1`-`4`: jump to slot.
+- `R` / `W` / `C`: jump to read / write / clone mode.
+- Enter: run selected read, or arm then confirm write/clone.
+- Backspace/Del: arm/confirm clearing the selected slot.
+- Backtick: cancel an armed action.
 
 Expected limitations:
 
 - Only MIFARE Classic 1K is handled.
-- Only sectors that authenticate with `FF FF FF FF FF FF` are read/written.
-- Block 0, UID bytes, sector trailers, keys, and access bits are not written.
-- A destination card with the same UID as the stored source is refused.
-- Same-card project data rewrites are supported through the explicit
-  `write-block` serial command for normal data blocks.
+- Only sectors whose keys are in the dictionary are read/written (default `FF` +
+  any keys you add). Unknown keys cannot be recovered.
+- UID / block 0 is only rewritten on **magic / UID-changeable** cards.
+- Sector trailers (keys + access bits) are written only with `trailers on`.
+- Same-card data-block rewrites are also available via the `write-block` serial
+  command.
+
+## Cloning & access control — what actually transfers
+
+A card just holds **data**, gated by **keys**, with a **UID**. Whether a clone is
+*accepted by a reader* depends on what that reader checks. Three common models:
+
+**1. Data-based reader (auth with keys → read data → decide).**
+The "access" lives in the **data blocks**, which the WRITE/CLONE data copy
+already transfers. The reader authenticates each sector with a key, then reads —
+so the clone works only if the destination's **keys match** what the reader uses.
+A blank destination already has the default key `FF…FF` on every sector, so if
+the source is also all-default, the reader authenticates with `FF`, reads the
+copied data, and access works **without writing trailers**. Trailers are needed
+only if the source uses **non-default keys** (then the blank dest's `FF` wouldn't
+match and you must write the source's keys into the trailers), or if specific
+access bits matter.
+
+**2. UID-based reader (just checks the serial number).**
+The reader reads **block 0 / UID** (no key needed) and looks it up; data and keys
+are irrelevant. This requires cloning the UID → a **magic card**. A normal
+destination can never pass.
+
+**3. Cryptographic / UID-diversified reader.**
+Keys are derived from the UID, or the card does challenge–response, or data is
+signed. These often **cannot be cloned at all**, even with full data + keys +
+UID, because the security isn't in copyable bytes.
+
+So, directly:
+
+- A **byte-for-byte full copy** = data + trailers + UID. But **functional access**
+  usually needs only the subset your particular reader checks.
+- You only need to **write trailers** if the source uses non-default keys (so the
+  reader can authenticate the clone) or relies on specific access bits.
+- You only need the **UID** (→ a magic card) if the reader is UID-based or
+  UID-diversified (models 2/3).
+- Not enabling trailers does **not** automatically mean "no access": with a
+  data-based reader and default keys (model 1), the data-only clone already
+  carries the access.
+
+Practical order: **test the data-only clone in the real reader first** (cheapest).
+If it's rejected, the limiter is almost always the UID → use a magic card.
 
 ## Monitor
 
@@ -110,13 +165,17 @@ The firmware also accepts these USB serial commands at 115200 baud:
 - `slots`
 - `next`
 - `ui`
-- `mode read|write`
+- `mode read|write|clone`
 - `slot <1-4>`
 - `scan`
 - `store [slot] [confirm]`
 - `dump [slot]`
 - `write [slot] confirm`
+- `clone [slot] confirm`
 - `write-block <block> <32hex>`
+- `keys` / `key add <12hex>` / `key clear` / `key reset`
+- `trailers on|off`
+- `sd`
 - `clear [slot]`
 - `clear all confirm`
 - `reset-rfid`
@@ -167,12 +226,14 @@ Install OpenOCD if needed:
 
 ## Expected Screen Output
 
-- `RFID2 keyboard UI`: the unit was detected and is waiting for explicit
-  selection.
-- `READ Slot N`: press Enter with a source card present to save data.
-- `WRITE Slot N vX`: press Enter once to arm, then press Enter again to write
-  saved version `X`.
-- `Read saved`: source lab card data blocks were saved to the selected slot.
-- `Write complete`: copyable readable blocks were written to the destination.
-- `RFID2 not found`: check the Grove cable and verify the RFID2 unit is on
-  address `0x28`.
+The HUD shows a status bar (`RFID2` link, `SD`/`RAM`, key count `Kn`, `TRL` when
+trailers are on), READ/WRITE/CLONE mode tabs, a slot strip (filled = has data,
+boxed = selected), a content panel, and a contextual action bar. Result screens:
+
+- `Read saved` — source data saved; the panel shows `Nb Ns/16` (blocks/sectors,
+  e.g. `64b 16s/16` = full read).
+- `Read failed` — `Auth failed N/16`; the card uses keys not in the dictionary.
+- `Write complete` — `Written: N, Failures: M` (data blocks only).
+- `Clone complete` / `Clone partial` — `UID copied`/`UID kept`, blocks + failures.
+  On a normal card the UID can't change, so expect one failure for block 0.
+- `RFID2 not found` — check the Grove cable and that the unit is at `0x28`.
