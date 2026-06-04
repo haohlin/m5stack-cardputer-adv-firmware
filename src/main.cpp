@@ -14,7 +14,7 @@ constexpr char kFwName[] = "cardputer-rfid2-fw";
 // output also read the runtime app description (esp_app_get_description())
 // which is always accurate for the actually-running binary regardless of
 // which OTA slot it was installed to.
-constexpr char kFwVersion[] = "1.5.0";
+constexpr char kFwVersion[] = "1.5.1";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -462,11 +462,15 @@ void drawHome(const String& footer = "") {
       d.drawRect(x + 1, slotY - 2, slotW - 2, slotH + 4, accent);
       d.drawRect(x + 2, slotY - 1, slotW - 4, slotH + 2, accent);  // 2px = thicker
     }
+    // Slot label: just the number. A filled dot shows the slot has data —
+    // no version number (it's meaningless to the user).
     d.setTextColor(dd.valid ? kColBg : kColDim, fill);
-    String lbl = String(s + 1);
-    if (dd.valid) lbl += "v" + String(dd.version);
-    d.setCursor(x + (slotW - (int)lbl.length() * kGlyphW) / 2, slotY + 4);
-    d.print(lbl);
+    d.setCursor(x + (slotW - kGlyphW) / 2, slotY + 4);
+    d.print(String(s + 1));
+    if (dd.valid) {
+      // Small filled dot bottom-right of the slot to indicate data present
+      d.fillCircle(x + slotW - 7, slotY + slotH - 4, 2, kColBg);
+    }
   }
 
   // Moving selection box: a bright white outline around the SELECTED item on the
@@ -483,34 +487,71 @@ void drawHome(const String& footer = "") {
     d.drawRect(x, slotY - 4, slotW, slotH + 8, kColText);
   }
 
-  // Content panel: mode+slot, dump stats, stored source UID, live card UID.
-  int y = 60;
+  // Content panel — three rows sized for 240px:
+  //   Row 1: live card status (prominent — most important thing to see)
+  //   Row 2: selected slot contents
+  //   Row 3: operation hint / source UID
+  int y = 58;
+
+  // Row 1: card detection (always shown, most important)
+  if (lastCard.valid) {
+    d.fillRect(0, y - 1, W, 13, 0x0420);  // faint green tint
+    d.setTextColor(kColOk, 0x0420);
+    d.setCursor(4, y);
+    d.print("ON  " + lastCard.uid);
+  } else {
+    d.setTextColor(kColDim, kColBg);
+    d.setCursor(4, y);
+    d.print("No card on reader");
+  }
+  y += 15;
+
+  // Row 2: selected slot state
   const StoredDump& cur = storedDumps[selectedSlot];
-  d.setTextColor(accent, kColBg);
-  d.setCursor(4, y);
-  d.printf("%s  Slot %u", modeName(selectedMode), (unsigned)(selectedSlot + 1));
-  y += 12;
-  d.setTextColor(kColText, kColBg);
   d.setCursor(4, y);
   if (cur.valid) {
-    d.printf("v%u  %ub  %us/16", (unsigned)cur.version, (unsigned)cur.blocksRead, (unsigned)cur.sectorsRead);
-  } else {
-    d.print("empty - read a card");
-  }
-  y += 12;
-  d.setCursor(4, y);
-  if (cur.valid && cur.sourceUid.length()) {
-    d.setTextColor(kColDim, kColBg);
-    d.print("src " + cur.sourceUid);
-  }
-  y += 11;
-  d.setCursor(4, y);
-  if (lastCard.valid) {
     d.setTextColor(kColInfo, kColBg);
-    d.print("card " + lastCard.uid);
+    d.printf("Slot %u: %ub %us/16  %s",
+      (unsigned)(selectedSlot + 1),
+      (unsigned)cur.blocksRead,
+      (unsigned)cur.sectorsRead,
+      cur.sourceUid.substring(0, 11).c_str());
   } else {
     d.setTextColor(kColDim, kColBg);
-    d.print("no card on reader");
+    d.printf("Slot %u: empty", (unsigned)(selectedSlot + 1));
+  }
+  y += 13;
+
+  // Row 3: what this mode does / source UID if different from live card
+  d.setCursor(4, y);
+  switch (selectedMode) {
+    case UiMode::Read:
+      if (cur.valid) {
+        d.setTextColor(kColDim, kColBg);
+        d.print("Place card → auto-reads");
+      } else {
+        d.setTextColor(kColDim, kColBg);
+        d.print("Place card to read it");
+      }
+      break;
+    case UiMode::Write:
+      if (cur.valid) {
+        d.setTextColor(kColDim, kColBg);
+        d.print("Place dest → auto-arms write");
+      } else {
+        d.setTextColor(kColClone, kColBg);
+        d.print("Slot empty — read first");
+      }
+      break;
+    case UiMode::Clone:
+      if (cur.valid) {
+        d.setTextColor(kColDim, kColBg);
+        d.print("Place MAGIC card → arm clone");
+      } else {
+        d.setTextColor(kColClone, kColBg);
+        d.print("Slot empty — read first");
+      }
+      break;
   }
 
   // Action bar: yellow when an action is armed, otherwise the mode accent.
@@ -1358,7 +1399,35 @@ void storeSelectedClassic1k(uint8_t slot) {
   nextDump.storedAtMs = millis();
   nextDump.sourceUidSize = rfid.uid.size;
 
+  // Show a live progress screen while reading — reading 16 sectors takes a few
+  // seconds; without feedback the device looks frozen.
+  auto drawReadProgress = [&](uint8_t sector) {
+    auto& d = M5.Display;
+    const int W = d.width(), H = d.height();
+    d.fillScreen(kColBg);
+    resultScreenActive = true;
+    d.fillRect(0, 0, W, 16, kColRead);
+    d.setTextColor(kColBg, kColRead);
+    d.setTextSize(1);
+    d.setCursor(5, 4);
+    d.print("Reading...");
+    d.setTextColor(kColText, kColBg);
+    d.setCursor(4, 22);
+    d.printf("Card: %s", sourceUid.c_str());
+    d.setCursor(4, 36);
+    d.printf("Sector %u / %u", (unsigned)sector + 1, (unsigned)kClassic1kSectors);
+    // Progress bar
+    const int pbX = 4, pbY = 52, pbW = W - 8, pbH = 8;
+    d.drawRect(pbX, pbY, pbW, pbH, kColDim);
+    d.fillRect(pbX + 1, pbY + 1, (pbW - 2) * (sector + 1) / kClassic1kSectors, pbH - 2, kColRead);
+    d.setTextColor(kColDim, kColBg);
+    d.setCursor(4, 68);
+    d.printf("Blocks: %u  Failed: %u", (unsigned)nextDump.blocksRead, (unsigned)nextDump.sectorsFailed);
+    M5Cardputer.update();  // keep keyboard responsive during long read
+  };
+
   for (uint8_t sector = 0; sector < kClassic1kSectors; ++sector) {
+    drawReadProgress(sector);
     const uint8_t firstBlock = sector * 4;
     byte sectorKey[kClassicKeySize];
     if (!authenticateSectorWithDictionary(firstBlock, sectorKey)) {
@@ -1401,9 +1470,10 @@ void storeSelectedClassic1k(uint8_t slot) {
   const bool saved = nextDump.valid && saveSlotToSd(slot);
   emitStoredSummary("store", slot, storedDumps[slot], storedDumps[slot].valid ? "ok" : "no_blocks_read");
   if (storedDumps[slot].valid) {
-    drawLines("Read saved", slotTitle(slot) + " v" + String(storedDumps[slot].version),
-              "Blocks: " + String(storedDumps[slot].blocksRead) + "  Sec: " + String(storedDumps[slot].sectorsRead) + "/16",
-              sdReady ? (saved ? "Saved to SD" : "SD save FAILED") : "RAM only (no SD)");
+    drawLines("Read saved",
+              slotTitle(slot) + "  " + storedDumps[slot].sourceUid,
+              String(storedDumps[slot].blocksRead) + " blocks  " + String(storedDumps[slot].sectorsRead) + "/16 sectors",
+              sdReady ? (saved ? "Saved to SD" : "SD save failed") : "RAM only (no SD)");
   } else {
     drawLines("Read failed", "Auth failed " + String(nextDump.sectorsFailed) + "/16 sectors",
               "Card may use non-default keys", "Retry, or add keys (serial)");
@@ -1445,6 +1515,25 @@ void writeStoredDumpToSelectedClassic1k(uint8_t slot) {
   uint8_t blocksWritten = 0;
   uint8_t writeFailures = 0;
   for (uint8_t sector = 0; sector < kClassic1kSectors; ++sector) {
+    // Live progress
+    {
+      auto& d = M5.Display;
+      const int W = d.width();
+      d.fillScreen(kColBg);
+      resultScreenActive = true;
+      d.fillRect(0, 0, W, 16, kColWrite);
+      d.setTextColor(kColBg, kColWrite); d.setTextSize(1);
+      d.setCursor(5, 4); d.print("Writing...");
+      d.setTextColor(kColText, kColBg);
+      d.setCursor(4, 22); d.printf("Dest: %s", destUid.c_str());
+      d.setCursor(4, 36); d.printf("Sector %u / %u", (unsigned)sector + 1, (unsigned)kClassic1kSectors);
+      const int pbX = 4, pbY = 52, pbW = W - 8;
+      d.drawRect(pbX, pbY, pbW, 8, kColDim);
+      d.fillRect(pbX+1, pbY+1, (pbW-2)*(sector+1)/kClassic1kSectors, 6, kColWrite);
+      d.setTextColor(kColDim, kColBg);
+      d.setCursor(4, 68); d.printf("Written: %u  Errors: %u", (unsigned)blocksWritten, (unsigned)writeFailures);
+      M5Cardputer.update();
+    }
     const uint8_t firstBlock = sector * 4;
     bool hasWork = false;
     for (uint8_t offset = 0; offset < 3; ++offset) {
@@ -1543,6 +1632,25 @@ void cloneStoredDumpToSelectedClassic1k(uint8_t slot) {
   // 1) Data blocks (and optionally trailers), authenticating the destination
   //    with the key dictionary so non-default magic cards still work.
   for (uint8_t sector = 0; sector < kClassic1kSectors; ++sector) {
+    // Live progress
+    {
+      auto& d = M5.Display;
+      const int W = d.width();
+      d.fillScreen(kColBg);
+      resultScreenActive = true;
+      d.fillRect(0, 0, W, 16, kColClone);
+      d.setTextColor(kColBg, kColClone); d.setTextSize(1);
+      d.setCursor(5, 4); d.print("Cloning...");
+      d.setTextColor(kColText, kColBg);
+      d.setCursor(4, 22); d.printf("Dest: %s", destUid.c_str());
+      d.setCursor(4, 36); d.printf("Sector %u / %u", (unsigned)sector + 1, (unsigned)kClassic1kSectors);
+      const int pbX = 4, pbY = 52, pbW = W - 8;
+      d.drawRect(pbX, pbY, pbW, 8, kColDim);
+      d.fillRect(pbX+1, pbY+1, (pbW-2)*(sector+1)/kClassic1kSectors, 6, kColClone);
+      d.setTextColor(kColDim, kColBg);
+      d.setCursor(4, 68); d.printf("Blocks: %u  UID: %s", (unsigned)blocksWritten, block0Written ? "done" : "pending");
+      M5Cardputer.update();
+    }
     const uint8_t firstBlock = sector * 4;
     bool hasWork = false;
     for (uint8_t offset = 0; offset < 3; ++offset) {
