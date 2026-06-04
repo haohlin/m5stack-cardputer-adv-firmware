@@ -14,7 +14,7 @@ constexpr char kFwName[] = "cardputer-rfid2-fw";
 // output also read the runtime app description (esp_app_get_description())
 // which is always accurate for the actually-running binary regardless of
 // which OTA slot it was installed to.
-constexpr char kFwVersion[] = "1.5.2";
+constexpr char kFwVersion[] = "1.5.3";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -487,154 +487,50 @@ void drawHome(const String& footer = "") {
     d.drawRect(x, slotY - 4, slotW, slotH + 8, kColText);
   }
 
-  // Content panel — state-driven layout between the slot strip and action bar.
-  // Three states: WAITING (no card), CARD READY (card present, action pending),
-  // CONFIRM (action armed, countdown running).
+  // Content panel: three rows below the slot strip.
+  int y = 60;
   const StoredDump& cur = storedDumps[selectedSlot];
-  const int contentY = slotY + slotH + 6;   // just below slot strip
-  const int barY = H - 13;
-  const int contentH = barY - contentY - 2;
 
-  if (armed) {
-    // ── CONFIRM state: action is armed, countdown, show confirm/cancel ──────
-    const int32_t msLeft = (int32_t)(armedUntilMs - millis());
-    const uint8_t secsLeft = msLeft > 0 ? (uint8_t)(msLeft / 1000) + 1 : 0;
-
-    // Card info row
-    d.fillRect(0, contentY, W, 14, 0x0420);
+  if (lastCard.valid) {
+    d.fillRect(0, y - 1, W, 13, 0x0420);
     d.setTextColor(kColOk, 0x0420);
-    d.setCursor(4, contentY + 3);
-    d.print(lastCard.valid ? lastCard.uid : "card");
-
-    // Slot row
-    int y2 = contentY + 18;
-    d.setTextColor(kColText, kColBg);
-    d.setCursor(4, y2);
-    if (cur.valid) {
-      d.printf("Slot %u  %ub %us/16", (unsigned)(selectedSlot+1),
-               (unsigned)cur.blocksRead, (unsigned)cur.sectorsRead);
-    } else {
-      d.printf("Slot %u: empty", (unsigned)(selectedSlot+1));
-    }
-
-    // Confirm options row with countdown
-    y2 += 14;
-    d.fillRect(0, y2, W, 14, kColArmed);
-    d.setTextColor(kColBg, kColArmed);
-    d.setCursor(4, y2 + 3);
-    d.printf("ENTER confirm  `=cancel  %us", (unsigned)secsLeft);
-
-  } else if (lastCard.valid) {
-    // ── CARD READY state: card present, show info + primary action ───────────
-    // Card UID — large, prominent
-    d.fillRect(0, contentY, W, 16, 0x0420);
-    d.setTextColor(kColOk, 0x0420);
-    d.setTextSize(1);
-    d.setCursor(4, contentY + 4);
-    d.print(lastCard.uid + "  " + lastCard.typeName.substring(0, 8));
-
-    int y2 = contentY + 20;
-    // Slot state
-    d.setTextColor(kColText, kColBg);
-    d.setCursor(4, y2);
-    if (cur.valid) {
-      d.printf("Slot %u: %ub %us/16  src %s",
-               (unsigned)(selectedSlot+1),
-               (unsigned)cur.blocksRead, (unsigned)cur.sectorsRead,
-               cur.sourceUid.substring(0, 8).c_str());
-    } else {
-      d.setTextColor(kColDim, kColBg);
-      d.printf("Slot %u: empty", (unsigned)(selectedSlot+1));
-    }
-    y2 += 14;
-
-    // Action hint for this mode + card state
-    d.setCursor(4, y2);
-    switch (selectedMode) {
-      case UiMode::Read:
-        if (cur.valid && lastCard.uid == cur.sourceUid) {
-          d.setTextColor(kColDim, kColBg);
-          d.print("Same card as stored — overwrite?");
-        } else if (cur.valid) {
-          d.setTextColor(kColWrite, kColBg);
-          d.print("ENTER: overwrite slot  `=cancel");
-        } else {
-          d.setTextColor(kColOk, kColBg);
-          d.print("Reading...");  // auto-triggered
-        }
-        break;
-      case UiMode::Write:
-        if (!cur.valid) {
-          d.setTextColor(kColClone, kColBg);
-          d.print("Slot empty — READ a card first");
-        } else if (lastCard.uid == cur.sourceUid) {
-          d.setTextColor(kColClone, kColBg);
-          d.print("Same UID as source — refused");
-        } else {
-          d.setTextColor(kColOk, kColBg);
-          d.print("ENTER: confirm write to card");
-        }
-        break;
-      case UiMode::Clone:
-        if (!cur.valid) {
-          d.setTextColor(kColClone, kColBg);
-          d.print("Slot empty — READ a card first");
-        } else {
-          d.setTextColor(kColOk, kColBg);
-          d.print("ENTER: confirm CLONE (needs MAGIC)");
-        }
-        break;
-    }
-
+    d.setCursor(4, y);
+    d.print("ON  " + lastCard.uid);
   } else {
-    // ── WAITING state: no card on reader ────────────────────────────────────
-    const int midY = contentY + contentH / 2 - 10;
-
-    // Big waiting indicator
     d.setTextColor(kColDim, kColBg);
-    d.setCursor(W / 2 - 7 * kGlyphW / 2, midY - 2);
-    d.print("Waiting...");
-
-    // Slot state below
-    d.setCursor(4, midY + 14);
-    if (cur.valid) {
-      d.setTextColor(kColInfo, kColBg);
-      d.printf("Slot %u: %ub %us/16", (unsigned)(selectedSlot+1),
-               (unsigned)cur.blocksRead, (unsigned)cur.sectorsRead);
-    } else {
+    d.setCursor(4, y);
+    d.print("No card on reader");
+  }
+  y += 15;
+  d.setCursor(4, y);
+  if (cur.valid) {
+    d.setTextColor(kColInfo, kColBg);
+    d.printf("Slot %u: %ub %us/16  %s",
+      (unsigned)(selectedSlot+1), (unsigned)cur.blocksRead,
+      (unsigned)cur.sectorsRead, cur.sourceUid.substring(0,11).c_str());
+  } else {
+    d.setTextColor(kColDim, kColBg);
+    d.printf("Slot %u: empty", (unsigned)(selectedSlot+1));
+  }
+  y += 13;
+  d.setCursor(4, y);
+  switch (selectedMode) {
+    case UiMode::Read:
       d.setTextColor(kColDim, kColBg);
-      d.printf("Slot %u: empty", (unsigned)(selectedSlot+1));
-    }
-
-    // Hint for what to do
-    d.setCursor(4, midY + 28);
-    switch (selectedMode) {
-      case UiMode::Read:
-        d.setTextColor(kColDim, kColBg);
-        d.print("Place card on reader to read");
-        break;
-      case UiMode::Write:
-        if (!cur.valid) {
-          d.setTextColor(kColClone, kColBg);
-          d.print("Slot empty — READ a card first");
-        } else {
-          d.setTextColor(kColDim, kColBg);
-          d.print("Place dest card to write");
-        }
-        break;
-      case UiMode::Clone:
-        if (!cur.valid) {
-          d.setTextColor(kColClone, kColBg);
-          d.print("Slot empty — READ a card first");
-        } else {
-          d.setTextColor(kColDim, kColBg);
-          d.print("Place MAGIC card to clone");
-        }
-        break;
-    }
+      d.print(cur.valid ? "Place card → auto-reads" : "Place card to read it");
+      break;
+    case UiMode::Write:
+      if (cur.valid) { d.setTextColor(kColDim,  kColBg); d.print("Place dest card to write"); }
+      else           { d.setTextColor(kColClone, kColBg); d.print("Slot empty — READ first"); }
+      break;
+    case UiMode::Clone:
+      if (cur.valid) { d.setTextColor(kColDim,  kColBg); d.print("Place MAGIC card to clone"); }
+      else           { d.setTextColor(kColClone, kColBg); d.print("Slot empty — READ first"); }
+      break;
   }
 
   // Action bar: yellow when armed, otherwise the mode accent.
+  const int barY = H - 13;
   const uint16_t hintCol = armed ? kColArmed : accent;
   d.fillRect(0, barY, W, 13, hintCol);
   d.setTextColor(kColBg, hintCol);
@@ -648,6 +544,96 @@ void drawHome(const String& footer = "") {
 // Options overlay: a focused settings card with a highlighted active row, a
 // segmented brightness meter, and an ON/OFF sound pill. Same tactical-terminal
 // language as the HUD (cyan chrome, accent fills, full-width action bar).
+// Armed sub-page: shown when WRITE or CLONE is armed (after first Enter press)
+// and re-drawn each time pollCardPreview detects a change. Three states:
+//   No card  → "Waiting for card..." + instruction
+//   Card on  → card UID + ENTER to confirm / ` to cancel
+//   (READ overwrite is handled similarly)
+void drawArmedScreen() {
+  auto& d = M5.Display;
+  const int W = d.width();
+  const int H = d.height();
+  const uint16_t accent = accentForMode(armedMode);
+  resultScreenActive = true;    // keep preview from wiping this screen
+  d.fillScreen(kColBg);
+  d.setTextSize(1);
+
+  // Title bar — mode accent
+  d.fillRect(0, 0, W, 16, accent);
+  d.setTextColor(kColBg, accent);
+  d.setCursor(5, 4);
+  const char* modeLabel = (armedMode == UiMode::Write)  ? "WRITE armed" :
+                          (armedMode == UiMode::Clone)  ? "CLONE armed" :
+                                                          "READ overwrite";
+  d.print(modeLabel);
+
+  // Countdown top-right
+  const int32_t msLeft = (int32_t)(armedUntilMs - millis());
+  const uint8_t secs   = msLeft > 0 ? (uint8_t)(msLeft / 1000) + 1 : 0;
+  String secsStr = String(secs) + "s";
+  d.setCursor(W - (int)secsStr.length() * kGlyphW - 4, 4);
+  d.print(secsStr);
+
+  // Slot info row
+  const StoredDump& dump = storedDumps[armedSlot];
+  d.setTextColor(kColInfo, kColBg);
+  d.setCursor(4, 22);
+  if (dump.valid)
+    d.printf("Slot %u: %ub %us/16  src %s",
+             (unsigned)(armedSlot+1), (unsigned)dump.blocksRead,
+             (unsigned)dump.sectorsRead, dump.sourceUid.substring(0,10).c_str());
+  else
+    d.printf("Slot %u: empty", (unsigned)(armedSlot+1));
+
+  // Card detection area — main content
+  if (lastCard.valid) {
+    // Card IS present — show it green, ready to confirm
+    d.fillRect(0, 36, W, 20, 0x0420);
+    d.setTextColor(kColOk, 0x0420);
+    d.setCursor(4, 40);
+    d.printf("Card: %s", lastCard.uid.c_str());
+    d.setTextColor(kColDim, 0x0420);
+    d.setCursor(4, 51);
+    d.print(lastCard.typeName.substring(0, 20));
+
+    // Action hint below card info
+    d.setCursor(4, 62);
+    if (armedMode == UiMode::Clone) {
+      d.setTextColor(kColText, kColBg);
+      d.print("ENTER: clone (needs MAGIC card)");
+    } else if (armedMode == UiMode::Read) {
+      d.setTextColor(kColWrite, kColBg);
+      d.print("ENTER: overwrite slot");
+    } else {
+      d.setTextColor(kColText, kColBg);
+      d.print("ENTER: write to this card");
+    }
+  } else {
+    // No card yet — waiting
+    d.setTextColor(kColDim, kColBg);
+    d.setCursor(W/2 - 8*kGlyphW/2, 44);
+    d.print("Waiting...");
+    d.setCursor(4, 58);
+    if (armedMode == UiMode::Clone)
+      d.print("Place MAGIC card on reader");
+    else if (armedMode == UiMode::Read)
+      d.print("Place source card on reader");
+    else
+      d.print("Place destination card on reader");
+  }
+
+  // Action bar
+  const int barY = H - 13;
+  const uint16_t barCol = lastCard.valid ? kColArmed : kColDim;
+  d.fillRect(0, barY, W, 13, barCol);
+  d.setTextColor(kColBg, barCol);
+  d.setCursor(4, barY + 3);
+  if (lastCard.valid)
+    d.print("ENTER confirm  ` cancel");
+  else
+    d.print("` cancel");
+}
+
 void drawOptions() {
   auto& d = M5.Display;
   const int W = d.width();
@@ -1940,7 +1926,7 @@ void executeSelectedAction() {
       if (storedDumps[selectedSlot].valid && !isArmedAction(PendingAction::ReadOverwrite)) {
         armSelection(PendingAction::ReadOverwrite);
         emitMessage("armed", "slot has data; Enter=overwrite, `=keep for " + slotTitle(selectedSlot));
-        drawLines("Slot has data", slotSummary(selectedSlot), "Enter: OVERWRITE", "`: keep existing");
+        drawArmedScreen();
         return;
       }
       cancelArm();
@@ -1956,7 +1942,7 @@ void executeSelectedAction() {
       if (!isArmedAction(PendingAction::WriteSlot)) {
         armSelection(PendingAction::WriteSlot);
         emitMessage("armed", "write armed for " + slotSummary(selectedSlot) + "; press Enter again within 8s");
-        drawLines("Write armed", slotSummary(selectedSlot), "Enter: confirm write", "`: cancel");
+        drawArmedScreen();
         return;
       }
       cancelArm();
@@ -1972,7 +1958,7 @@ void executeSelectedAction() {
       if (!isArmedAction(PendingAction::CloneSlot)) {
         armSelection(PendingAction::CloneSlot);
         emitMessage("armed", "CLONE armed for " + slotSummary(selectedSlot) + " (rewrites UID+block0); Enter again within 8s");
-        drawLines("CLONE armed", slotSummary(selectedSlot), "Enter: CLONE incl UID", "needs MAGIC card");
+        drawArmedScreen();
         return;
       }
       cancelArm();
@@ -2139,7 +2125,8 @@ void pollCardPreview() {
     if (lastCard.valid) {
       lastCard.valid = false;
       resetAutoTrigger();
-      if (!resultScreenActive) drawHome();
+      if (isArmedForSelection()) drawArmedScreen();  // update armed sub-page: card gone
+      else if (!resultScreenActive) drawHome();
     }
     return;
   }
@@ -2182,7 +2169,7 @@ void pollCardPreview() {
         // Slot occupied → arm overwrite prompt; user confirms with Enter or cancels.
         armSelection(PendingAction::ReadOverwrite);
         emitMessage("auto", "card detected; slot occupied — Enter=overwrite, `=keep");
-        drawLines("Slot has data", slotSummary(selectedSlot), "Enter: OVERWRITE", "`: keep existing");
+        drawArmedScreen();
         // Card left selected; arm window ticks down; user presses Enter to read.
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
@@ -2200,7 +2187,7 @@ void pollCardPreview() {
     if (selectedMode == UiMode::Write && storedDumps[selectedSlot].valid) {
       armSelection(PendingAction::WriteSlot);
       emitMessage("auto", "card detected; write armed for " + slotSummary(selectedSlot) + " — Enter to confirm");
-      drawLines("Write armed", slotSummary(selectedSlot), "Enter: write to card", "`: cancel");
+      drawArmedScreen();
       rfid.PICC_HaltA();
       rfid.PCD_StopCrypto1();
       return;
@@ -2209,14 +2196,16 @@ void pollCardPreview() {
     if (selectedMode == UiMode::Clone && storedDumps[selectedSlot].valid) {
       armSelection(PendingAction::CloneSlot);
       emitMessage("auto", "card detected; clone armed for " + slotSummary(selectedSlot) + " — Enter to confirm");
-      drawLines("Clone armed", slotSummary(selectedSlot), "Enter: CLONE incl UID", "`: cancel");
+      drawArmedScreen();
       rfid.PICC_HaltA();
       rfid.PCD_StopCrypto1();
       return;
     }
   }
 
-  if (!resultScreenActive) drawHome();
+  // If an action is armed, keep the armed sub-page live and updated with card info.
+  if (isArmedForSelection()) drawArmedScreen();
+  else if (!resultScreenActive) drawHome();
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 }
