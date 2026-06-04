@@ -51,6 +51,12 @@ reader / writer / cloner for the owner's own lab cards.
   Verified on hardware: with a FAT32 card inserted + reset, `sd_ready=true` and
   slots/keys/config (`/rfid/slot*.dump`, `keys.txt`, `config.txt`) survive a
   power-cycle.
+- **GPIO5 must be driven HIGH before SD init when the LoRa Cap is attached.**
+  GPIO5 is the LoRa Cap's SPI CS and both it and the SD share the FSPI bus. If
+  GPIO5 floats LOW at boot, the LoRa chip asserts on FSPI during `SD.begin()` →
+  bus contention → `sd_ready=false`. Fix: `pinMode(5,OUTPUT); digitalWrite(5,HIGH)`
+  in `setup()` before `initSdStorage()`. Same fix is in the M5Stack Launcher
+  (boards/m5stack-cardputer/interface.cpp:84).
 - **Slot model.** 4 `StoredDump` slots (RAM), each a full MIFARE 1K image with
   per-sector working Key A + readable mask. Persisted to `/rfid/slot*.dump` text
   files and reloaded on boot when SD is present; key dictionary persists to
