@@ -14,14 +14,14 @@ constexpr char kFwName[] = "cardputer-rfid2-fw";
 // output also read the runtime app description (esp_app_get_description())
 // which is always accurate for the actually-running binary regardless of
 // which OTA slot it was installed to.
-constexpr char kFwVersion[] = "1.5.4";
+constexpr char kFwVersion[] = "1.5.5";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
 constexpr int kGroveScl = 1;
 constexpr uint32_t kI2cFrequency = 400000;
 constexpr uint32_t kHeartbeatMs = 3000;
-constexpr uint32_t kWriteArmWindowMs = 8000;
+constexpr uint32_t kWriteArmWindowMs = 120000;  // 2 min safety timeout; no countdown shown
 constexpr size_t kCommandMax = 96;
 constexpr uint8_t kClassic1kBlocks = 64;
 constexpr uint8_t kClassic1kSectors = 16;
@@ -550,28 +550,26 @@ void drawHome(const String& footer = "") {
 // Uses M5Canvas sprite → pushed atomically, zero flicker.
 namespace {
   struct ArmedScreenCache {
-    bool     cardValid  = false;
-    String   cardUid;
-    uint8_t  secsLeft   = 255;  // 255 = undrawn
-    UiMode   mode       = UiMode::Read;
+    bool    cardValid = false;
+    String  cardUid;
+    bool    dirty     = true;  // true = must redraw on next call
+    UiMode  mode      = UiMode::Read;
   } _armedCache;
 }
 
 void drawArmedScreen() {
-  const int32_t msLeft = (int32_t)(armedUntilMs - millis());
-  const uint8_t secs   = msLeft > 0 ? (uint8_t)(msLeft / 1000) + 1 : 0;
-
-  // Only redraw when something visible changes (card presence, UID, countdown).
-  if (_armedCache.cardValid == lastCard.valid &&
+  // Only redraw when card state or mode changes — no countdown means no
+  // per-second redraws, so a held card produces a completely stable screen.
+  if (!_armedCache.dirty            &&
+      _armedCache.cardValid == lastCard.valid &&
       _armedCache.cardUid   == lastCard.uid   &&
-      _armedCache.secsLeft  == secs           &&
       _armedCache.mode      == armedMode) {
-    resultScreenActive = true;  // still keep preview blocked
+    resultScreenActive = true;
     return;
   }
   _armedCache.cardValid = lastCard.valid;
   _armedCache.cardUid   = lastCard.uid;
-  _armedCache.secsLeft  = secs;
+  _armedCache.dirty     = false;
   _armedCache.mode      = armedMode;
 
   auto& disp = M5.Display;
@@ -596,11 +594,6 @@ void drawArmedScreen() {
   d.setCursor(5, 4);
   d.print(armedMode == UiMode::Write ? "WRITE" :
           armedMode == UiMode::Clone ? "CLONE" : "READ overwrite");
-
-  // Countdown top-right
-  String secsStr = String(secs) + "s";
-  d.setCursor(W - (int)secsStr.length() * kGlyphW - 4, 4);
-  d.print(secsStr);
 
   // Slot info
   const StoredDump& dump = storedDumps[armedSlot];
@@ -734,7 +727,7 @@ void armSelection(PendingAction action) {
   armedMode = selectedMode;
   armedSlot = selectedSlot;
   armedUntilMs = millis() + kWriteArmWindowMs;
-  _armedCache.secsLeft = 255;  // force redraw on first drawArmedScreen() call
+  _armedCache.dirty = true;  // force full redraw on first drawArmedScreen() call
 }
 
 void selectSlot(uint8_t slot) {
