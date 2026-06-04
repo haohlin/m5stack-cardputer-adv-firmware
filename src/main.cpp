@@ -5,10 +5,11 @@
 #include <SPI.h>
 #include <SD.h>
 #include <FS.h>
+#include <math.h>
 
 namespace {
 constexpr char kFwName[] = "cardputer-rfid2-fw";
-constexpr char kFwVersion[] = "1.0.0";
+constexpr char kFwVersion[] = "1.2.0";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -124,6 +125,14 @@ UiMode armedMode = UiMode::Read;
 uint8_t armedSlot = 0;
 uint32_t armedUntilMs = 0;
 bool writeDone = false;
+
+// Last-seen status bar values — if any change the bar redraws in real-time.
+struct StatusCache {
+  bool usbPlugged = false;
+  bool usbCdc = false;
+  int8_t batLevel = -2;   // -2 = uninitialised
+  bool charging = false;
+} statusCache;
 
 // True while a full-screen result/notice (drawLines) is showing. The live card
 // preview must not repaint the home HUD over it, or read/write results would
@@ -260,6 +269,92 @@ void beep(uint16_t freq = 2200, uint16_t ms = 20) {
   M5.Speaker.tone(freq, ms);
 }
 
+// Top status bar: RFID link + SD/key state on the left; USB, charging, and a
+// battery gauge on the right.
+// Reads the current USB/battery/charging state and caches it so the live-update
+// watcher in loop() knows whether a redraw is actually needed.
+struct StatusSnapshot {
+  bool usbPlugged;   // physical USB cable present (Serial.isPlugged)
+  bool usbCdc;       // host terminal actively connected (Serial.isConnected)
+  int8_t batLevel;   // 0-100 or -1
+  bool charging;     // inferred: plugged AND batLevel not at 100
+};
+
+StatusSnapshot readStatus() {
+  StatusSnapshot s;
+  s.usbPlugged  = Serial.isPlugged();
+  s.usbCdc      = Serial.isConnected();
+  s.batLevel    = (int8_t)M5.Power.getBatteryLevel();
+  // Cardputer-Adv has no PMIC so isCharging() returns charge_unknown.
+  // Best we can do: charge is happening whenever USB is plugged and the
+  // battery is not already reporting 100%.
+  s.charging    = s.usbPlugged && (s.batLevel < 0 || s.batLevel < 100);
+  return s;
+}
+
+void drawStatusBar() {
+  auto& d = M5.Display;
+  const int W = d.width();
+  d.fillRect(0, 0, W, 13, kColBar);
+
+  // Left: RFID link, SD/RAM, key count, trailer flag.
+  d.setTextColor(rfidReady ? kColOk : kColClone, kColBar);
+  d.setCursor(3, 3);
+  d.print(rfidReady ? "RFID2" : "NO RF");
+  d.setTextColor(sdReady ? kColInfo : kColDim, kColBar);
+  d.setCursor(40, 3);
+  d.print(sdReady ? "SD" : "RAM");
+  d.setTextColor(kColText, kColBar);
+  d.setCursor(60, 3);
+  d.printf("K%u", (unsigned)dictKeyCount);
+  if (cloneWriteTrailers) {
+    d.setTextColor(kColWrite, kColBar);
+    d.setCursor(60 + (dictKeyCount >= 10 ? 24 : 18), 3);
+    d.print("T");
+  }
+
+  // Right: battery gauge + ⚡ charge bolt + USB/CDC tag.
+  // Serial.isPlugged() detects physical cable via USB-JTAG SOF interrupt —
+  // true even when no terminal is open, and it updates in real-time in loop().
+  const StatusSnapshot st = readStatus();
+  statusCache.usbPlugged = st.usbPlugged;
+  statusCache.usbCdc     = st.usbCdc;
+  statusCache.batLevel   = st.batLevel;
+  statusCache.charging   = st.charging;
+
+  const int lvl = st.batLevel;
+  const uint16_t bc = lvl < 0 ? kColDim : (lvl < 15 ? kColClone : (lvl < 40 ? kColWrite : kColOk));
+  const int bx = W - 20;
+  d.drawRect(bx, 3, 15, 8, bc);
+  d.fillRect(bx + 15, 5, 2, 4, bc);  // battery nub
+  if (lvl >= 0) {
+    const int fw = (13 * lvl) / 100;
+    if (fw > 0) d.fillRect(bx + 1, 4, fw, 6, st.charging ? kColArmed : bc);
+  }
+  String pct = lvl < 0 ? String("--") : String(lvl);
+  int px = bx - (int)pct.length() * kGlyphW - 3;
+  d.setTextColor(bc, kColBar);
+  d.setCursor(px, 3);
+  d.print(pct);
+  if (st.charging) {  // ⚡ bolt: USB plugged + not full
+    const int zx = px - 7;
+    d.drawLine(zx + 3, 2, zx, 6, kColArmed);
+    d.drawLine(zx, 6, zx + 4, 6, kColArmed);
+    d.drawLine(zx + 4, 6, zx + 1, 11, kColArmed);
+    px = zx;
+  }
+  // "CDC" = terminal open (more specific), "USB" = cable plugged but no terminal.
+  if (st.usbCdc) {
+    d.setTextColor(kColOk, kColBar);
+    d.setCursor(px - 3 * kGlyphW - 4, 3);
+    d.print("CDC");
+  } else if (st.usbPlugged) {
+    d.setTextColor(kColInfo, kColBar);
+    d.setCursor(px - 3 * kGlyphW - 4, 3);
+    d.print("USB");
+  }
+}
+
 // Home HUD: status bar, mode tabs, slot strip, content panel, and a contextual
 // action bar. Mode accent (green/amber/red) and the yellow "armed" bar make the
 // current state and the next keypress obvious at a glance on the 240x135 screen.
@@ -289,16 +384,7 @@ void drawHome(const String& footer = "") {
   resultScreenActive = false;
   d.setTextSize(1);
 
-  // Status bar: RFID link on the left; SD/RAM + key count + trailer flag right.
-  d.fillRect(0, 0, W, 13, kColBar);
-  d.setTextColor(rfidReady ? kColOk : kColClone, kColBar);
-  d.setCursor(4, 3);
-  d.print(rfidReady ? "RFID2" : "NO RF");
-  String right = String(sdReady ? "SD" : "RAM") + " K" + String(dictKeyCount);
-  if (cloneWriteTrailers) right += " TRL";
-  d.setTextColor(kColText, kColBar);
-  d.setCursor(W - (int)right.length() * kGlyphW - 4, 3);
-  d.print(right);
+  drawStatusBar();
 
   // Mode tabs: READ / WRITE / CLONE, active one filled with its accent.
   const int tabsY = 18, tabsH = 15;
@@ -342,11 +428,18 @@ void drawHome(const String& footer = "") {
     d.print(lbl);
   }
 
-  // Focus caret: a filled triangle at the left edge pointing at the active row,
-  // so it is unambiguous which row Left/Right will move within.
-  {
-    const int fy = (focusRow == kFocusModeRow) ? (tabsY + tabsH / 2) : (slotY + slotH / 2);
-    d.fillTriangle(0, fy - 4, 0, fy + 4, 5, fy, accent);
+  // Moving selection box: a bright white outline around the SELECTED item on the
+  // currently-focused line. It hops between the mode line and the slot line as you
+  // press Up/Down, so the active selection is always unambiguous (the per-line
+  // accent fill/box stays, showing the selection each line will remember).
+  if (focusRow == kFocusModeRow) {
+    const int x = (uint8_t)selectedMode * tabW;
+    d.drawRect(x + 1, tabsY - 1, tabW - 2, tabsH + 2, kColText);
+    d.drawRect(x, tabsY - 2, tabW, tabsH + 4, kColText);
+  } else {
+    const int x = selectedSlot * slotW;
+    d.drawRect(x + 1, slotY - 3, slotW - 2, slotH + 6, kColText);
+    d.drawRect(x, slotY - 4, slotW, slotH + 8, kColText);
   }
 
   // Content panel: mode+slot, dump stats, stored source UID, live card UID.
@@ -986,6 +1079,17 @@ void emitStatus(const char* reason) {
   Serial.print(dictKeyCount);
   Serial.print(",\"clone_trailers\":");
   Serial.print(cloneWriteTrailers ? "true" : "false");
+  {
+    const StatusSnapshot _ss = readStatus();
+    Serial.print(",\"battery\":");
+    Serial.print(_ss.batLevel);
+    Serial.print(",\"usb_plugged\":");
+    Serial.print(_ss.usbPlugged ? "true" : "false");
+    Serial.print(",\"usb_cdc\":");
+    Serial.print(_ss.usbCdc ? "true" : "false");
+    Serial.print(",\"charging\":");
+    Serial.print(_ss.charging ? "true" : "false");
+  }
   Serial.print(",\"slots\":[");
   for (uint8_t slot = 0; slot < kDumpSlotCount; ++slot) {
     if (slot) Serial.print(',');
@@ -1992,82 +2096,127 @@ void pollSerialCommands() {
     }
   }
 }
-// Animated boot splash: a radar "ping" of expanding rings out of a card glyph,
-// the product title, a staged progress bar, and the firmware version. Same
-// tactical-terminal palette as the HUD.
-void runBootSequence() {
-  auto& d = M5.Display;
-  const int W = d.width();
-  const int H = d.height();
-  const int cx = 42;   // radar origin (left third)
-  const int cy = 76;
-  const int frames = 22;
-  for (int f = 0; f <= frames; ++f) {
-    d.fillScreen(kColBg);
-
-    // Radar rings first, so the title sits on top of them.
-    for (int w = 0; w < 3; ++w) {
-      const int r = ((f * 4) + w * 14) % 42 + 12;
-      d.drawCircle(cx, cy, r, kColOk);
-    }
-    d.fillRoundRect(cx - 12, cy - 9, 24, 18, 3, kColInfo);
-    d.fillRect(cx - 8, cy - 4, 12, 2, kColBg);
-    d.fillRect(cx - 8, cy, 12, 2, kColBg);
-
-    // Title + subtitle
-    d.setTextSize(2);
-    d.setTextColor(kColOk, kColBg);
-    d.setCursor(W / 2 - 30, 8);
-    d.print("RFID2");
-    d.setTextSize(1);
-    d.setTextColor(kColInfo, kColBg);
-    const char* sub = "CLONE STATION";
-    d.setCursor(W / 2 - (int)strlen(sub) * kGlyphW / 2, 28);
-    d.print(sub);
-
-    // Staged progress bar
-    const int pbX = 12, pbY = H - 26, pbW = W - 24, pbH = 8;
-    d.drawRect(pbX, pbY, pbW, pbH, kColDim);
-    d.fillRect(pbX + 1, pbY + 1, (pbW - 2) * f / frames, pbH - 2, kColOk);
-    d.setTextColor(kColText, kColBg);
-    const char* st = f < 7 ? "BOOT" : (f < 13 ? "microSD" : (f < 18 ? "KEYS / SLOTS" : "READY"));
-    d.setCursor(pbX, pbY - 11);
-    d.print(st);
-
-    // Version footer
-    d.setTextColor(kColDim, kColBg);
-    d.setCursor(4, H - 10);
-    d.print(kFwVersion);
-
-    delay(38);
+// Draws one expanding "ping" ring of the beacon as red side ARCS (gaps at top and
+// bottom, like the product ((•)) mark) into an off-screen canvas.
+void drawBeaconArc(M5Canvas& g, int cx, int cy, int r, uint16_t color) {
+  for (int a = -48; a <= 48; a += 6) {
+    const float e = (float)a * 0.01745329f;          // east arc
+    const float w = (float)(a + 180) * 0.01745329f;  // west arc (mirror)
+    g.fillCircle(cx + (int)(r * cosf(e)), cy + (int)(r * sinf(e)), 1, color);
+    g.fillCircle(cx + (int)(r * cosf(w)), cy + (int)(r * sinf(w)), 1, color);
   }
-  beep(2600, 30);
+}
 
-  // Persistent splash: stay on the boot screen until the user presses any key
-  // (a serial byte also releases it, so the device remains scriptable). A
-  // blinking prompt is drawn over the now-full progress bar.
-  const int py = H - 26;
-  bool show = true;
-  uint32_t lastBlink = 0;
-  while (true) {
+// Animated boot splash: the original radar-ping look, recoloured RED — concentric
+// red arc rings ping outward from a pulsing red centre dot, an Orbitron "RFID2"
+// title, a red progress bar that becomes a gentle PRESS ANY KEY prompt, and a
+// small haohanl/version credit. Rendered to an off-screen M5Canvas and pushed in
+// one shot, so there is NO full-screen flicker. The ping keeps animating while
+// waiting for a key; a serial byte also releases it.
+void runBootSequence() {
+  auto& disp = M5.Display;
+  const int W = disp.width();
+  const int H = disp.height();
+  const int cx = W / 2;
+  const uint16_t RED = 0xF800;
+  const uint16_t REDmid = 0xC800;
+  const uint16_t REDdim = 0x6000;
+  const String credit = String("by haohanl  v") + kFwVersion;
+
+  M5Canvas cv(&disp);
+  cv.setColorDepth(16);
+  const bool buf = cv.createSprite(W, H);
+
+  const uint32_t start = millis();
+  for (;;) {
     M5Cardputer.update();
-    if ((M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || Serial.available() > 0) {
+    const uint32_t t = millis() - start;
+    const bool loaded = t > 1300;
+    if (loaded && ((M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) ||
+                   Serial.available() > 0)) {
       break;
     }
-    if ((uint32_t)(millis() - lastBlink) >= 450) {
-      lastBlink = millis();
-      show = !show;
-      d.fillRect(0, py - 1, W, 12, kColBg);
-      if (show) {
-        const char* p = "PRESS ANY KEY";
-        d.setTextSize(1);
-        d.setTextColor(kColOk, kColBg);
-        d.setCursor(W / 2 - (int)strlen(p) * kGlyphW / 2, py);
-        d.print(p);
+    if (!buf) { delay(30); continue; }  // no back-buffer: skip drawing, still wait for key
+
+    cv.fillScreen(kColBg);
+    cv.drawRoundRect(1, 1, W - 2, H - 2, 6, 0x2104);  // bezel frame
+
+    // Status row: USB (left) + battery gauge (right).
+    const int lvl = (int)M5.Power.getBatteryLevel();
+    const bool charging = (int)M5.Power.isCharging() == 1;
+    if ((bool)Serial) {
+      cv.setTextColor(kColInfo, kColBg);
+      cv.setCursor(6, 4);
+      cv.print("USB");
+    }
+    {
+      const uint16_t bcol = lvl < 0 ? kColDim : (lvl < 15 ? RED : (lvl < 40 ? kColWrite : kColOk));
+      const int bx = W - 22;
+      cv.drawRect(bx, 4, 15, 8, bcol);
+      cv.fillRect(bx + 15, 6, 2, 4, bcol);
+      if (lvl >= 0) {
+        const int fw = (13 * lvl) / 100;
+        if (fw > 0) cv.fillRect(bx + 1, 5, fw, 6, charging ? kColArmed : bcol);
+      }
+      String pct = (lvl < 0 ? String("--") : String(lvl)) + "%";
+      cv.setTextColor(bcol, kColBg);
+      cv.setCursor(bx - (int)pct.length() * kGlyphW - 2, 4);
+      cv.print(pct);
+    }
+
+    // Title + subtitle (top, centred)
+    cv.setFont(&fonts::Orbitron_Light_24);
+    cv.setTextDatum(middle_center);
+    cv.setTextColor(kColText, kColBg);
+    cv.drawString("RFID2", cx, 20);
+    cv.setFont(&fonts::Font0);
+    cv.setTextDatum(top_left);
+    cv.setTextSize(1);
+    cv.setTextColor(kColInfo, kColBg);
+    {
+      const char* s = "CLONE STATION";
+      cv.setCursor(cx - (int)strlen(s) * kGlyphW / 2, 34);
+      cv.print(s);
+    }
+
+    // Beacon (left third): red side-arc rings standing well clear of the centre
+    // dot (like the product mark) and pinging slowly outward. Time-based so the
+    // motion stays calm regardless of frame rate (~2s cycle).
+    const int bcx = 60, bcy = 74;
+    for (int i = 0; i < 3; ++i) {
+      const int ph = ((int)(t / 66) + i * 10) % 30;  // 0..29, ~2s loop
+      const int r = 16 + ph;                          // 16..45: offset from dot, wider spread
+      const uint16_t col = ph < 10 ? RED : (ph < 20 ? REDmid : REDdim);
+      drawBeaconArc(cv, bcx, bcy, r, col);
+    }
+    cv.fillCircle(bcx, bcy, 3 + (((int)(t / 600)) & 1), RED);  // small, slow-pulsing core
+
+    // Stage label / prompt above a full-width red progress bar.
+    const int pbX = 12, pbW = W - 24, pbY = 118;
+    cv.drawRect(pbX, pbY, pbW, 6, kColDim);
+    if (!loaded) {
+      cv.fillRect(pbX + 1, pbY + 1, (pbW - 2) * (int)t / 1300, 4, RED);
+      cv.setTextColor(kColDim, kColBg);
+      cv.setCursor(pbX, 110);
+      cv.print("INITIALISING");
+    } else {
+      cv.fillRect(pbX + 1, pbY + 1, pbW - 2, 4, RED);
+      if (((int)(t / 700)) & 1) {  // slow ~1.4s blink
+        cv.setTextColor(kColText, kColBg);
+        cv.setCursor(pbX, 110);
+        cv.print("PRESS ANY KEY");
       }
     }
-    delay(15);
+
+    // Credit + real version (bottom-left)
+    cv.setTextColor(kColDim, kColBg);
+    cv.setCursor(pbX, 126);
+    cv.print(credit);
+
+    cv.pushSprite(0, 0);
+    delay(33);  // ~30fps: smooth but calm
   }
+  if (buf) cv.deleteSprite();
   beep(2000, 20);
 }
 
@@ -2116,10 +2265,30 @@ void setup() {
   emitStatus("boot");
 }
 
+// Redraws just the 13px status bar strip and re-stamps it over the current HUD —
+// called when USB or battery state changes between loop() iterations.
+void refreshStatusBarLive() {
+  if (resultScreenActive || optionsOpen) return;  // don't paint over result/options screens
+  drawStatusBar();
+}
+
 void loop() {
   M5Cardputer.update();
   pollSerialCommands();
   handleKeyboardUi();
+
+  // Live USB / battery / charge watcher: redraws the status bar immediately
+  // whenever the cable is inserted or removed, a terminal connects/disconnects,
+  // or the battery level crosses a threshold — no keypress needed.
+  {
+    const StatusSnapshot cur = readStatus();
+    if (cur.usbPlugged != statusCache.usbPlugged ||
+        cur.usbCdc     != statusCache.usbCdc     ||
+        cur.charging   != statusCache.charging   ||
+        (cur.batLevel  != statusCache.batLevel && cur.batLevel >= 0)) {
+      refreshStatusBarLive();
+    }
+  }
 
   const uint32_t now = millis();
   if ((uint32_t)(now - lastStatusMs) >= kHeartbeatMs) {

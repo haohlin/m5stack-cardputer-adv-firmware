@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RFID2 Clone Station — Boot screen options</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Share+Tech+Mono&family=Chakra+Petch:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --rfid-red:#ff2e2e; --rfid-red-dim:#7a1414;
+    --term-green:#36f08a; --term-cyan:#46d6ff; --amber:#ffb020;
+    --panel:#e9e7e2; --ink:#15140f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:#0c0d10;
+    color:#cfd2d8;
+    font-family:'Chakra Petch',sans-serif;
+    min-height:100vh;
+    padding:40px 24px 80px;
+    background-image:radial-gradient(circle at 20% 0%,#16181d 0,#0c0d10 60%);
+  }
+  h1{font-family:'Chakra Petch';font-weight:700;font-size:26px;letter-spacing:.04em;color:#fff}
+  .sub{font-family:'Share Tech Mono';color:#7e828c;margin:6px 0 32px;font-size:14px}
+  .grid{display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start}
+  .card{display:flex;flex-direction:column;gap:14px}
+  .label{font-family:'Share Tech Mono';font-size:13px;color:#9aa0ab;letter-spacing:.05em}
+  .label b{color:#fff;font-size:15px}
+  .note{font-family:'Share Tech Mono';font-size:11px;color:#6b6f79;max-width:300px;line-height:1.5}
+  .pick{display:inline-block;margin-top:2px;font-family:'Share Tech Mono';font-size:12px;color:var(--term-green)}
+
+  /* a device screen is exactly 240x135 internal px, scaled up 2.5x */
+  .screen{
+    width:240px;height:135px;position:relative;overflow:hidden;
+    border-radius:6px;transform:scale(2.5);transform-origin:top left;
+    image-rendering:pixelated;
+    box-shadow:0 0 0 2px #2a2d34, 0 18px 40px rgba(0,0,0,.6);
+  }
+  .stage{width:600px;height:337px;margin-bottom:6px}      /* 240*2.5 x 135*2.5 */
+  .pixfont{font-family:'Share Tech Mono';-webkit-font-smoothing:none;}
+
+  /* ===== shared status bar (battery / usb / sd) ===== */
+  .statusbar{position:absolute;top:0;left:0;right:0;height:13px;display:flex;align-items:center;
+    justify-content:space-between;padding:0 4px;font-family:'Share Tech Mono';font-size:9px;}
+  .bat{display:inline-flex;align-items:center;gap:2px}
+  .batbox{width:16px;height:8px;border:1px solid currentColor;border-radius:1px;position:relative;padding:1px}
+  .batbox::after{content:"";position:absolute;right:-3px;top:2px;width:2px;height:4px;background:currentColor}
+  .batfill{height:100%;background:currentColor;width:80%}
+  .bolt{color:var(--amber)}
+
+  /* ================= VARIANT A — PRODUCT BEACON (light) ================= */
+  .a{background:var(--panel);color:var(--ink)}
+  .a .statusbar{color:#444}
+  .a .beacon{position:absolute;top:34px;left:50%;transform:translateX(-50%);width:130px;height:70px}
+  .a .dot{position:absolute;left:50%;top:50%;width:14px;height:14px;border-radius:50%;
+    background:var(--rfid-red);transform:translate(-50%,-50%);
+    box-shadow:0 0 0 0 rgba(255,46,46,.6);animation:pulseDot 1.6s ease-out infinite}
+  .a .arc{position:absolute;top:50%;border:3px solid var(--rfid-red);border-radius:50%;
+    transform:translateY(-50%);opacity:0}
+  .a .title{position:absolute;bottom:26px;width:100%;text-align:center;
+    font-family:'Archivo Black';font-size:22px;letter-spacing:.06em;color:var(--ink)}
+  .a .tag{position:absolute;bottom:13px;width:100%;text-align:center;font-family:'Share Tech Mono';
+    font-size:9px;color:#8a1d1d;letter-spacing:.18em}
+  .a .key{position:absolute;bottom:2px;width:100%;text-align:center;font-family:'Share Tech Mono';
+    font-size:9px;color:#b00;animation:blink 1s steps(1) infinite}
+  /* expanding arcs both sides */
+  .a .w{position:absolute;top:50%;left:50%;width:18px;height:18px;border:3px solid var(--rfid-red);
+    border-radius:50%;transform:translate(-50%,-50%);opacity:0;animation:ring 1.6s ease-out infinite}
+  .a .w2{animation-delay:.5s}.a .w3{animation-delay:1s}
+  @keyframes ring{0%{width:14px;height:14px;opacity:.9}80%{opacity:.12}100%{width:120px;height:120px;opacity:0}}
+  @keyframes pulseDot{0%{box-shadow:0 0 0 0 rgba(255,46,46,.5)}70%{box-shadow:0 0 0 10px rgba(255,46,46,0)}100%{box-shadow:0 0 0 0 rgba(255,46,46,0)}}
+  @keyframes blink{50%{opacity:0}}
+
+  /* ================= VARIANT B — DARK RADAR (tactical) ================= */
+  .b{background:#04070a;color:var(--term-green)}
+  .b .statusbar{color:#5a6b62}
+  .b .radar{position:absolute;top:24px;left:50%;transform:translateX(-50%);width:78px;height:78px;border-radius:50%;
+    background:radial-gradient(circle,#0a1f16 0,#04070a 70%);box-shadow:inset 0 0 0 1px #11402c}
+  .b .rgrid{position:absolute;inset:0;border-radius:50%;
+    background:repeating-radial-gradient(circle,transparent 0 12px,rgba(54,240,138,.16) 12px 13px)}
+  .b .sweep{position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg,rgba(54,240,138,.55),transparent 70deg);
+    animation:spin 1.8s linear infinite}
+  .b .blip{position:absolute;width:5px;height:5px;border-radius:50%;background:var(--term-cyan);
+    box-shadow:0 0 6px var(--term-cyan);animation:blip 3.6s ease-in-out infinite}
+  .b .title{position:absolute;top:108px;width:100%;text-align:center;font-family:'Chakra Petch';font-weight:700;
+    font-size:16px;letter-spacing:.12em;color:#eafff2}
+  .b .tag{position:absolute;top:124px;width:100%;text-align:center;font-family:'Share Tech Mono';font-size:9px;
+    color:var(--term-cyan);letter-spacing:.2em;animation:flick 2.5s steps(1) infinite}
+  .b .scan{position:absolute;left:0;right:0;height:2px;background:rgba(54,240,138,.18);animation:scan 3s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes blip{0%,40%{opacity:0}45%{opacity:1}80%,100%{opacity:0}}
+  @keyframes scan{0%{top:13px}100%{top:135px}}
+  @keyframes flick{0%,92%{opacity:1}94%{opacity:.3}96%{opacity:1}}
+
+  /* ================= VARIANT C — NEON PULSE (red on black) ================= */
+  .c{background:#08090c;color:#9aa0ab}
+  .c .statusbar{color:#5b5f68}
+  .c::before{content:"";position:absolute;inset:0;
+    background:linear-gradient(rgba(255,46,46,.05) 1px,transparent 1px);background-size:100% 6px;opacity:.5}
+  .c .arcs{position:absolute;top:18px;left:50%;transform:translateX(-50%);width:120px;height:70px}
+  .c .arcs path{fill:none;stroke:var(--rfid-red);stroke-width:3;stroke-linecap:round;opacity:.12;
+    filter:drop-shadow(0 0 3px rgba(255,46,46,.85));animation:wave 1.6s ease-in-out infinite}
+  .c .arcs .r2{animation-delay:.22s}
+  .c .arcs .r3{animation-delay:.44s}
+  .c .arcs circle{fill:var(--rfid-red);filter:drop-shadow(0 0 5px rgba(255,46,46,.9));
+    transform-origin:60px 35px;animation:dotp 1.6s ease-in-out infinite}
+  .c .title{position:absolute;bottom:30px;width:100%;text-align:center;font-family:'Archivo Black';
+    font-size:20px;letter-spacing:.1em;color:#fff;text-shadow:0 0 8px rgba(255,46,46,.7)}
+  .c .tag{position:absolute;bottom:18px;width:100%;text-align:center;font-family:'Share Tech Mono';font-size:9px;
+    color:var(--rfid-red);letter-spacing:.22em}
+  .c .key{position:absolute;bottom:3px;width:100%;text-align:center;font-family:'Share Tech Mono';font-size:9px;
+    color:#fff;opacity:.8;animation:blink 1.2s steps(1) infinite}
+  /* waves ripple outward to BOTH sides (inner arc first), never up/down over text */
+  @keyframes wave{0%,100%{opacity:.12}45%{opacity:1}}
+  @keyframes dotp{0%,100%{transform:scale(1)}50%{transform:scale(1.35)}}
+
+  /* ================= VARIANT D — RADAR RED (the cool one, in red + arcs) ===== */
+  .d{background:#080406;color:#ff6a6a}
+  .d .statusbar{color:#86505a}
+  .d .radar{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:90px;height:90px}
+  .d .rings{position:absolute;inset:0}
+  .d .rings circle{fill:none;stroke:var(--rfid-red);stroke-width:1.6;stroke-linecap:round;
+    filter:drop-shadow(0 0 2px rgba(255,46,46,.7));transform-origin:45px 45px}
+  .d .rings .a1{stroke-dasharray:83 42; animation:spin 9s linear infinite}
+  .d .rings .a2{stroke-dasharray:124 64;animation:spin 7s linear infinite reverse;opacity:.8}
+  .d .rings .a3{stroke-dasharray:166 85;animation:spin 12s linear infinite;opacity:.6}
+  .d .sweep{position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg,rgba(255,46,46,.55),rgba(255,46,46,0) 55deg);
+    -webkit-mask:radial-gradient(circle,#000 66%,transparent 67%);mask:radial-gradient(circle,#000 66%,transparent 67%);
+    animation:spin 2s linear infinite}
+  .d .cdot{position:absolute;left:50%;top:50%;width:9px;height:9px;border-radius:50%;background:var(--rfid-red);
+    transform:translate(-50%,-50%);box-shadow:0 0 8px 1px var(--rfid-red);animation:dpz 2s ease-in-out infinite}
+  .d .blip{position:absolute;width:5px;height:5px;border-radius:50%;background:#ff9a9a;box-shadow:0 0 6px #ff5a5a;
+    top:32%;left:66%;animation:blip 4s ease-in-out infinite}
+  .d .title{position:absolute;bottom:30px;width:100%;text-align:center;font-family:'Chakra Petch';font-weight:700;
+    font-size:18px;letter-spacing:.14em;color:#fff;text-shadow:0 0 8px rgba(255,46,46,.6)}
+  .d .tag{position:absolute;bottom:18px;width:100%;text-align:center;font-family:'Share Tech Mono';font-size:9px;
+    color:var(--rfid-red);letter-spacing:.2em}
+  .d .credit{position:absolute;bottom:4px;width:100%;text-align:center;font-family:'Share Tech Mono';font-size:8px;
+    color:#7a4b4b;letter-spacing:.12em}
+  @keyframes dpz{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.3)}}
+
+  /* ================= VARIANT E — ORIGINAL v0.8.0 (green radar-ping) ========== */
+  .e{background:#070406;color:#ff8a8a}
+  .e .frame{position:absolute;inset:3px;border:1px solid #2a2d34;border-radius:6px;pointer-events:none}
+  .e .statusbar{color:#7a5560}
+  .e .cdot{position:absolute;left:60px;top:78px;width:12px;height:12px;border-radius:50%;background:var(--rfid-red);
+    transform:translate(-50%,-50%);box-shadow:0 0 8px var(--rfid-red);animation:dpz 2s ease-in-out infinite}
+  /* expanding red side-ARCS (left+right only) — "red arc with red dot" */
+  .e .ping{position:absolute;left:60px;top:78px;border:2px solid transparent;
+    border-left-color:var(--rfid-red);border-right-color:var(--rfid-red);border-radius:50%;
+    transform:translate(-50%,-50%);opacity:0;animation:ping 2.1s ease-out infinite;
+    filter:drop-shadow(0 0 3px rgba(255,46,46,.7))}
+  .e .ping.p2{animation-delay:.7s}.e .ping.p3{animation-delay:1.4s}
+  .e .title{position:absolute;top:8px;width:100%;text-align:center;font-family:'Chakra Petch';font-weight:700;
+    font-size:18px;letter-spacing:.12em;color:#fff}
+  .e .tag{position:absolute;top:30px;width:100%;text-align:center;font-family:'Share Tech Mono';font-size:9px;
+    color:var(--term-cyan);letter-spacing:.2em}
+  .e .barwrap{position:absolute;left:12px;right:12px;bottom:16px;height:8px;border:1px solid #5a1e22}
+  .e .bar{height:100%;background:var(--rfid-red);width:30%;animation:fill 2.6s ease-in-out infinite}
+  .e .stg{position:absolute;left:12px;bottom:28px;font-family:'Share Tech Mono';font-size:9px;color:#9fb0c0}
+  .e .ver{position:absolute;left:12px;bottom:4px;font-family:'Share Tech Mono';font-size:8px;color:#7a5560}
+  @keyframes ping{0%{width:34px;height:34px;opacity:.9}100%{width:104px;height:104px;opacity:0}}
+  @keyframes fill{0%{width:6%}55%{width:100%}100%{width:100%}}
+</style>
+</head>
+<body>
+  <h1>RFID2 Clone Station — boot screen options</h1>
+  <div class="sub">Rendered at the real 240×135 px, scaled 2.5×. Effects loop forever (they keep running while waiting for a key). Pick one and I'll port it to the device.</div>
+
+  <div class="grid">
+
+    <!-- ===== A ===== -->
+    <div class="card">
+      <div class="stage"><div class="screen a">
+        <div class="statusbar">
+          <span>USB</span>
+          <span class="bat"><span style="color:#1a7a36">80%</span><span class="batbox" style="color:#1a7a36"><span class="batfill"></span></span></span>
+        </div>
+        <div class="beacon">
+          <div class="dot"></div>
+          <div class="w"></div><div class="w w2"></div><div class="w w3"></div>
+        </div>
+        <div class="title">RFID 2</div>
+        <div class="tag">CLONE STATION</div>
+        <div class="key">PRESS ANY KEY</div>
+      </div></div>
+      <div class="label"><b>A · Product Beacon</b> (light)</div>
+      <div class="note">Faithful to the actual RFID2 label: off-white panel, bold black “RFID 2”, the red ((•)) beacon pulsing outward forever. Cleanest / most “official”.</div>
+      <span class="pick">choose: A</span>
+    </div>
+
+    <!-- ===== B ===== -->
+    <div class="card">
+      <div class="stage"><div class="screen b">
+        <div class="statusbar">
+          <span>USB ⚡</span>
+          <span class="bat"><span>62%</span><span class="batbox"><span class="batfill" style="width:62%"></span></span></span>
+        </div>
+        <div class="radar">
+          <div class="rgrid"></div>
+          <div class="sweep"></div>
+          <div class="blip" style="top:30%;left:64%"></div>
+        </div>
+        <div class="scan"></div>
+        <div class="title">RFID2</div>
+        <div class="tag">CLONE STATION · v1.0.0</div>
+      </div></div>
+      <div class="label"><b>B · Dark Radar</b> (matches the HUD)</div>
+      <div class="note">Tactical-terminal look that matches the in-app HUD. A green radar dish with a sweep that rotates continuously + occasional contact blip. Most cohesive with the rest of the UI.</div>
+      <span class="pick">choose: B</span>
+    </div>
+
+    <!-- ===== C ===== -->
+    <div class="card">
+      <div class="stage"><div class="screen c">
+        <div class="statusbar">
+          <span>USB</span>
+          <span class="bat"><span>17%</span><span class="batbox"><span class="batfill" style="width:17%;background:var(--amber)"></span></span></span>
+        </div>
+        <svg class="arcs" viewBox="0 0 120 70">
+          <!-- right-side arcs (open to the right) -->
+          <path class="r1" d="M69.96 26.64 A13 13 0 0 1 69.96 43.36"/>
+          <path class="r2" d="M76.85 20.85 A22 22 0 0 1 76.85 49.15"/>
+          <path class="r3" d="M83.70 15.10 A31 31 0 0 1 83.70 54.90"/>
+          <!-- left-side arcs (mirror) -->
+          <path class="r1" d="M50.04 43.36 A13 13 0 0 1 50.04 26.64"/>
+          <path class="r2" d="M43.15 49.15 A22 22 0 0 1 43.15 20.85"/>
+          <path class="r3" d="M36.30 54.90 A31 31 0 0 1 36.30 15.10"/>
+          <circle cx="60" cy="35" r="5"/>
+        </svg>
+        <div class="title">RFID 2</div>
+        <div class="tag">CLONE STATION</div>
+        <div class="key">PRESS ANY KEY</div>
+      </div></div>
+      <div class="label"><b>C · Neon Pulse</b> (red on black)</div>
+      <div class="note">The product’s red beacon, but glowing neon on black with a faint CRT scanline texture. Keeps the iconic red ((•)) while feeling techy. Rings pulse continuously.</div>
+      <span class="pick">choose: C</span>
+    </div>
+
+    <!-- ===== D ===== -->
+    <div class="card">
+      <div class="stage"><div class="screen d">
+        <div class="statusbar">
+          <span>USB ⚡</span>
+          <span class="bat"><span>74%</span><span class="batbox"><span class="batfill" style="width:74%;background:#ff6a6a"></span></span></span>
+        </div>
+        <div class="radar">
+          <svg class="rings" viewBox="0 0 90 90">
+            <circle class="a1" cx="45" cy="45" r="20"></circle>
+            <circle class="a2" cx="45" cy="45" r="30"></circle>
+            <circle class="a3" cx="45" cy="45" r="40"></circle>
+          </svg>
+          <div class="sweep"></div>
+          <div class="cdot"></div>
+          <div class="blip"></div>
+        </div>
+        <div class="title">RFID2</div>
+        <div class="tag">CLONE STATION</div>
+        <div class="credit">by haohanl · v1.1.0</div>
+      </div></div>
+      <div class="label"><b>D · Radar Red</b> ★ your "initial, but red + arcs"</div>
+      <div class="note">The radar look you liked, recoloured red with the range rings as rotating dashed ARCS (not full circles) + a red sweep + pulsing core. Techy title, small haohanl/version credit. Animates forever (incl. while waiting for a key).</div>
+      <span class="pick">choose: D</span>
+    </div>
+
+    <!-- ===== E ===== -->
+    <div class="card">
+      <div class="stage"><div class="screen e">
+        <div class="statusbar">
+          <span>USB</span>
+          <span class="bat"><span>74%</span><span class="batbox"><span class="batfill" style="width:74%;background:#36f08a"></span></span></span>
+        </div>
+        <div class="frame"></div>
+        <div class="ping"></div><div class="ping p2"></div><div class="ping p3"></div>
+        <div class="cdot"></div>
+        <div class="title">RFID2</div>
+        <div class="tag">CLONE STATION</div>
+        <div class="stg">INITIALISING</div>
+        <div class="barwrap"><div class="bar"></div></div>
+        <div class="ver">by haohanl · v1.1.0</div>
+      </div></div>
+      <div class="label"><b>E · chosen</b> (radar-ping layout, red arcs + dot)</div>
+      <div class="note">Your pick: the v0.8.0 radar-ping layout, with the logo changed to a red centre dot + expanding red side-ARCS, a red progress bar, and a haohanl/version credit. This is exactly what the firmware now renders (double-buffered, no flicker).</div>
+      <span class="pick">choose: E</span>
+    </div>
+
+  </div>
+</body>
+</html>
