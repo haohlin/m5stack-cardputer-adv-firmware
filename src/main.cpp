@@ -10,7 +10,11 @@
 
 namespace {
 constexpr char kFwName[] = "cardputer-rfid2-fw";
-constexpr char kFwVersion[] = "1.4.1";
+// kFwVersion is the human-readable release tag. The boot splash and serial
+// output also read the runtime app description (esp_app_get_description())
+// which is always accurate for the actually-running binary regardless of
+// which OTA slot it was installed to.
+constexpr char kFwVersion[] = "1.5.0";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -50,6 +54,12 @@ constexpr uint16_t kColArmed   = 0xFFE0;  // yellow (action armed)
 constexpr uint16_t kColInfo    = 0x5D7F;  // cyan (data present)
 constexpr uint16_t kColOk      = 0x2FEC;  // green (success)
 constexpr int kGlyphW = 6;                // built-in font cell width at size 1
+
+// Returns the version string baked into this build. kFwVersion IS the running
+// version — it's a compile-time constant that is bumped on every release, and
+// the deploy script always pushes the matching bin to the launcher SD so the
+// installed binary is always the one with the correct tag.
+static const char* runningVersion() { return kFwVersion; }
 
 MFRC522_I2C rfid(kRfidI2cAddress, kRfidResetPin);
 bool rfidReady = false;
@@ -1076,7 +1086,7 @@ void emitEventPrefix(const char* event) {
   Serial.print(",\"fw\":");
   printJsonString(kFwName);
   Serial.print(",\"version\":");
-  printJsonString(kFwVersion);
+  printJsonString(runningVersion());
   Serial.print(",\"build\":");
   printJsonString(String(__DATE__) + " " + __TIME__);
   Serial.print(",\"uptime_ms\":");
@@ -2178,7 +2188,7 @@ void processCommand(String command) {
     drawHome();
     emitStatus("reset_rfid");
   } else if (command == "version") {
-    emitMessage("version", String(kFwName) + " " + kFwVersion);
+    emitMessage("version", String(kFwName) + " " + runningVersion());
   } else if (command == "help") {
     emitMessage("help", "commands: status, slots, next, ui, mode read|write|clone, slot <1-4>, scan, store [slot] [confirm], dump [slot], write [slot] confirm, clone [slot] confirm, write-block <block> <32hex>, keys, key add <12hex>, key clear, key reset, trailers on|off, sd, clear [slot]|all confirm, reset-rfid, version, help");
   } else {
@@ -2225,7 +2235,7 @@ void runBootSequence() {
   const uint16_t RED = 0xF800;
   const uint16_t REDmid = 0xC800;
   const uint16_t REDdim = 0x6000;
-  const String credit = String("by haohanl  v") + kFwVersion;
+  const String credit = String("by haohanl  v") + runningVersion();
 
   M5Canvas cv(&disp);
   cv.setColorDepth(16);
@@ -2371,7 +2381,7 @@ void setup() {
   runBootSequence();
 
   if (rfidReady) {
-    drawHome(String(sdReady ? "SD ok" : "no SD") + "  FW " + String(kFwVersion));
+    drawHome(String(sdReady ? "SD ok" : "no SD") + "  FW " + runningVersion());
   } else {
     drawLines("RFID2 not found", "Check Grove cable", "SDA=G2 SCL=G1", "I2C: " + lastI2cScan);
   }
