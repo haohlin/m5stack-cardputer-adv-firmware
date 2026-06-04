@@ -9,23 +9,32 @@ driving a **Unit RFID2** (WS1850S / MFRC522-class, I2C `0x28` on the Grove port,
 SDA=G2/SCL=G1). It is a keyboard-driven, slot-based MIFARE Classic 1K
 reader / writer / cloner for the owner's own lab cards.
 
-## Build / flash / monitor
+## Deploy flow — THE LAUNCHER ALWAYS STAYS ON THE DEVICE
 
-```sh
-./scripts/build_cardputer_adv.sh                      # build env cardputer-adv-rfid2
-./scripts/flash_cardputer_adv.sh /dev/cu.usbmodem2101 # rebuilds, then esptool flash @115200
-./scripts/monitor_cardputer_adv.sh /dev/cu.usbmodem2101
-./scripts/watch_status.sh /dev/cu.usbmodem2101 --poll 2   # parsed realtime status
-./scripts/send_command.sh "<cmd>" /dev/cu.usbmodem2101    # one-shot serial command
-./scripts/pio_local.sh run -e cardputer-adv-rfid2         # raw PlatformIO build
+**Never flash RFID2 (or any user firmware) directly via esptool.**
+The `bmorcelli/Launcher` firmware lives permanently on the device. User firmwares
+are `.bin` files placed on the SD card and installed via the launcher's OTA.
+
+```
+1. Enable USB MSC on device: launcher → Settings → USB MSC
+2. Run:  ./scripts/flash_cardputer_adv.sh
+         (builds, copies bin to SD tools/, ejects SD)
+3. On device: exit USB MSC → navigate to tools/ → select bin → Install
+4. Launcher OTA flashes it to ota_0. Hold any key at boot to return to launcher.
 ```
 
-- Flashing uses a direct `esptool.py` path (4 image parts @115200, watchdog reset)
-  because PlatformIO's default upload/reset can leave this board in ROM download
-  mode. Don't "simplify" it back to `pio run -t upload`.
-- There is no test suite; verification is **hardware-in-the-loop** over USB serial.
-  Most read/write/clone paths require a physical card and cannot be verified
-  without the device — flash, then drive `send_command.sh` / the on-device keyboard.
+SD card layout: `tools/` (RFID2, Claude Buddy…), `games/`, `apps/`, `downloads/`
+
+```sh
+./scripts/flash_cardputer_adv.sh                      # build + deploy to SD
+./scripts/monitor_cardputer_adv.sh /dev/cu.usbmodem2101   # serial monitor
+./scripts/watch_status.sh /dev/cu.usbmodem2101 --poll 2   # parsed status
+./scripts/send_command.sh "<cmd>" /dev/cu.usbmodem2101    # one-shot serial
+./scripts/pio_local.sh run -e cardputer-adv-rfid2         # build only
+```
+
+esptool is **only** used to restore the launcher if it is ever wiped:
+`0x0 /tmp/launcher-bins/Launcher-m5stack-cardputer.bin`
 - Serial command surface (115200): `status slots next ui mode read|write|clone
   slot <1-4> scan store [slot] [confirm] dump [slot] write [slot] confirm
   clone [slot] confirm write-block <block> <32hex> keys key add|clear|reset
