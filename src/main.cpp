@@ -8,7 +8,7 @@
 
 namespace {
 constexpr char kFwName[] = "cardputer-rfid2-fw";
-constexpr char kFwVersion[] = "0.7.2-multisector-read-fix";
+constexpr char kFwVersion[] = "1.0.0";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -104,6 +104,20 @@ enum class PendingAction : uint8_t {
 StoredDump storedDumps[kDumpSlotCount];
 UiMode selectedMode = UiMode::Read;
 uint8_t selectedSlot = 0;
+// Which HUD row arrow keys steer: 0 = mode row (READ/WRITE/CLONE), 1 = slot row.
+// Up/Down pick the row; Left/Right move within the focused row.
+uint8_t focusRow = 0;
+constexpr uint8_t kFocusModeRow = 0;
+constexpr uint8_t kFocusSlotRow = 1;
+
+// Options overlay (opened with M): screen brightness + sound (default OFF).
+bool optionsOpen = false;
+uint8_t optionIndex = 0;            // 0 = brightness, 1 = sound
+constexpr uint8_t kOptionCount = 2;
+constexpr uint8_t kBrightnessLevels = 5;
+uint8_t brightnessLevel = 3;        // 0..4 -> dim..max
+constexpr uint8_t kSoundMax = 5;    // 5 volume steps (shown as 5 segments)
+uint8_t soundLevel = 0;             // 0 = OFF (default), 1..5 = quiet..loud
 uint32_t nextDumpVersion = 1;
 PendingAction pendingAction = PendingAction::None;
 UiMode armedMode = UiMode::Read;
@@ -232,6 +246,20 @@ void cancelArm() {
   armedUntilMs = 0;
 }
 
+void applyBrightness() {
+  static const uint8_t lut[kBrightnessLevels] = {25, 70, 120, 180, 255};
+  const uint8_t lvl = brightnessLevel < kBrightnessLevels ? brightnessLevel : kBrightnessLevels - 1;
+  M5.Display.setBrightness(lut[lvl]);
+}
+
+// Short UI feedback tone at the configured volume level (0 = off, the default).
+void beep(uint16_t freq = 2200, uint16_t ms = 20) {
+  if (soundLevel == 0) return;
+  static const uint8_t vol[kSoundMax + 1] = {0, 50, 100, 150, 205, 255};
+  M5.Speaker.setVolume(vol[soundLevel <= kSoundMax ? soundLevel : kSoundMax]);
+  M5.Speaker.tone(freq, ms);
+}
+
 // Home HUD: status bar, mode tabs, slot strip, content panel, and a contextual
 // action bar. Mode accent (green/amber/red) and the yellow "armed" bar make the
 // current state and the next keypress obvious at a glance on the 240x135 screen.
@@ -280,6 +308,8 @@ void drawHome(const String& footer = "") {
     const uint16_t acc = accentForMode((UiMode)i);
     const int x = i * tabW;
     if ((uint8_t)selectedMode == i) {
+      // Selected mode always keeps its accent colour; focus is shown by the left
+      // caret (not by greying), so the active mode stays clearly readable.
       d.fillRect(x + 2, tabsY, tabW - 4, tabsH, acc);
       d.setTextColor(kColBg, acc);
     } else {
@@ -299,12 +329,24 @@ void drawHome(const String& footer = "") {
     const StoredDump& dd = storedDumps[s];
     const uint16_t fill = dd.valid ? kColInfo : kColBar;
     d.fillRect(x + 3, slotY, slotW - 6, slotH, fill);
-    if (selectedSlot == s) d.drawRect(x + 1, slotY - 2, slotW - 2, slotH + 4, accent);
+    if (selectedSlot == s) {
+      // Selected slot keeps its accent box regardless of focus; the caret marks
+      // which row Left/Right steers.
+      d.drawRect(x + 1, slotY - 2, slotW - 2, slotH + 4, accent);
+      d.drawRect(x + 2, slotY - 1, slotW - 4, slotH + 2, accent);  // 2px = thicker
+    }
     d.setTextColor(dd.valid ? kColBg : kColDim, fill);
     String lbl = String(s + 1);
     if (dd.valid) lbl += "v" + String(dd.version);
     d.setCursor(x + (slotW - (int)lbl.length() * kGlyphW) / 2, slotY + 4);
     d.print(lbl);
+  }
+
+  // Focus caret: a filled triangle at the left edge pointing at the active row,
+  // so it is unambiguous which row Left/Right will move within.
+  {
+    const int fy = (focusRow == kFocusModeRow) ? (tabsY + tabsH / 2) : (slotY + slotH / 2);
+    d.fillTriangle(0, fy - 4, 0, fy + 4, 5, fy, accent);
   }
 
   // Content panel: mode+slot, dump stats, stored source UID, live card UID.
@@ -349,6 +391,70 @@ void drawHome(const String& footer = "") {
   d.print(hint);
 }
 
+// Options overlay: a focused settings card with a highlighted active row, a
+// segmented brightness meter, and an ON/OFF sound pill. Same tactical-terminal
+// language as the HUD (cyan chrome, accent fills, full-width action bar).
+void drawOptions() {
+  auto& d = M5.Display;
+  const int W = d.width();
+  const int H = d.height();
+  d.fillScreen(kColBg);
+  resultScreenActive = true;  // keep the preview poll from repainting the HUD
+  d.setTextSize(1);
+
+  // Title bar
+  d.fillRect(0, 0, W, 16, kColInfo);
+  d.setTextColor(kColBg, kColInfo);
+  d.setCursor(5, 4);
+  d.print("OPTIONS");
+  String close = "M close";
+  d.setCursor(W - (int)close.length() * kGlyphW - 4, 4);
+  d.print(close);
+
+  const int rowH = 20;
+  const int labelX = 8;
+  const int valX = 96;
+
+  // Brightness row
+  int y = 28;
+  bool sel = optionIndex == 0;
+  if (sel) d.fillRect(3, y - 3, W - 6, rowH, kColBar);
+  d.setTextColor(sel ? kColText : kColDim, sel ? kColBar : kColBg);
+  d.setCursor(labelX, y + 2);
+  d.print("Brightness");
+  const int segW = 14, segH = 11, segGap = 3;
+  for (uint8_t i = 0; i < kBrightnessLevels; ++i) {
+    const int sx = valX + i * (segW + segGap);
+    if (i <= brightnessLevel) d.fillRect(sx, y, segW, segH, kColOk);
+    else d.drawRect(sx, y, segW, segH, kColDim);
+  }
+
+  // Sound row — same 5-segment meter; level 0 (no segments) = OFF.
+  y = 28 + rowH + 6;
+  sel = optionIndex == 1;
+  if (sel) d.fillRect(3, y - 3, W - 6, rowH, kColBar);
+  d.setTextColor(sel ? kColText : kColDim, sel ? kColBar : kColBg);
+  d.setCursor(labelX, y + 2);
+  d.print("Sound");
+  for (uint8_t i = 0; i < kSoundMax; ++i) {  // 5 segments = volume 1..5
+    const int sx = valX + i * (segW + segGap);
+    if (i < soundLevel) d.fillRect(sx, y, segW, segH, kColOk);
+    else d.drawRect(sx, y, segW, segH, kColDim);
+  }
+  if (soundLevel == 0) {
+    d.setTextColor(sel ? kColText : kColDim, sel ? kColBar : kColBg);
+    d.setCursor(valX + kSoundMax * (segW + segGap) + 4, y + 2);
+    d.print("OFF");
+  }
+
+  // Action bar
+  const int barY = H - 13;
+  d.fillRect(0, barY, W, 13, kColInfo);
+  d.setTextColor(kColBg, kColInfo);
+  d.setCursor(4, barY + 3);
+  d.print("Up/Dn pick  L/R adjust  Esc/M close");
+}
+
 void setSelection(UiMode mode, uint8_t slot, const String& footer = "") {
   selectedMode = mode;
   selectedSlot = slot < kDumpSlotCount ? slot : 0;
@@ -389,6 +495,11 @@ void cycleMode(int8_t delta) {
   selectedMode = (UiMode)next;
   cancelArm();
   drawHome();
+}
+
+void setFocusRow(uint8_t row) {
+  focusRow = row <= kFocusSlotRow ? row : kFocusModeRow;
+  drawHome();  // focus change keeps the current selection (and any armed action)
 }
 
 String uidToString() {
@@ -760,6 +871,32 @@ bool loadKeysFromSd() {
   }
   f.close();
   return true;
+}
+
+void saveConfigToSd() {
+  if (!sdReady) return;
+  File f = SD.open("/rfid/config.txt", FILE_WRITE);
+  if (!f) return;
+  f.printf("brightness %u\n", brightnessLevel);
+  f.printf("sound %u\n", soundLevel);
+  f.close();
+}
+
+void loadConfigFromSd() {
+  if (!sdReady || !SD.exists("/rfid/config.txt")) return;
+  File f = SD.open("/rfid/config.txt", FILE_READ);
+  if (!f) return;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    const int sp = line.indexOf(' ');
+    if (sp < 0) continue;
+    const String tag = line.substring(0, sp);
+    const long v = line.substring(sp + 1).toInt();
+    if (tag == "brightness") brightnessLevel = (uint8_t)constrain(v, 0, kBrightnessLevels - 1);
+    else if (tag == "sound") soundLevel = (uint8_t)constrain(v, 0, kSoundMax);
+  }
+  f.close();
 }
 
 void printJsonString(const String& value) {
@@ -1495,6 +1632,36 @@ bool hasWord(const Keyboard_Class::KeysState& status, char a, char b = '\0') {
   return false;
 }
 
+void adjustOption(int8_t delta) {
+  if (optionIndex == 0) {
+    const int v = (int)brightnessLevel + delta;
+    brightnessLevel = (uint8_t)constrain(v, 0, kBrightnessLevels - 1);
+    applyBrightness();
+  } else {
+    const int v = (int)soundLevel + delta;
+    soundLevel = (uint8_t)constrain(v, 0, kSoundMax);
+    if (soundLevel > 0) beep();
+  }
+  drawOptions();
+}
+
+// Routes keys while the options overlay is open. Up/Down pick the row, Left/Right
+// adjust, Enter toggles/steps, M or backtick saves and closes.
+void handleOptionsKeys(const Keyboard_Class::KeysState& status) {
+  // Close on Esc/backtick, the Back/Del key, or M. Settings save on close.
+  if (status.del || hasWord(status, '`', '~') || hasWord(status, 'm', 'M')) {
+    optionsOpen = false;
+    saveConfigToSd();
+    drawHome("Options saved");
+    return;
+  }
+  if (hasWord(status, ';', ':')) { optionIndex = (optionIndex + kOptionCount - 1) % kOptionCount; drawOptions(); return; }
+  if (hasWord(status, '.', '>')) { optionIndex = (optionIndex + 1) % kOptionCount; drawOptions(); return; }
+  if (hasWord(status, ',', '<')) { adjustOption(-1); return; }
+  if (hasWord(status, '/', '?')) { adjustOption(1); return; }
+  if (status.enter) { adjustOption(1); return; }
+}
+
 void clearSelectedSlotAction() {
   if (!storedDumps[selectedSlot].valid) {
     drawHome(slotTitle(selectedSlot) + " already empty");
@@ -1513,6 +1680,14 @@ void clearSelectedSlotAction() {
 }
 
 void handleKeyboardUi() {
+  // Options overlay owns the keyboard while open.
+  if (optionsOpen) {
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      handleOptionsKeys(M5Cardputer.Keyboard.keysState());
+    }
+    return;
+  }
+
   if (pendingAction != PendingAction::None && (int32_t)(armedUntilMs - millis()) <= 0) {
     cancelArm();
     drawHome("Arm expired");
@@ -1530,47 +1705,62 @@ void handleKeyboardUi() {
     return;
   }
 
+  if (hasWord(status, 'm', 'M')) {
+    optionsOpen = true;
+    optionIndex = 0;
+    beep();
+    drawOptions();
+    return;
+  }
+
   if (status.del) {
     clearSelectedSlotAction();
     return;
   }
 
   if (status.enter) {
+    beep();
     executeSelectedAction();
     return;
   }
 
-  if (hasWord(status, ',', '<')) {
-    cycleMode(-1);
+  // Up/Down pick which row the arrows steer; Left/Right move within that row.
+  if (hasWord(status, ';', ':')) {  // Up -> mode row
+    setFocusRow(kFocusModeRow);
     return;
   }
 
-  if (hasWord(status, '/', '?')) {
-    cycleMode(1);
+  if (hasWord(status, '.', '>')) {  // Down -> slot row
+    setFocusRow(kFocusSlotRow);
     return;
   }
 
-  if (hasWord(status, ';', ':')) {
-    moveSlot(-1);
+  if (hasWord(status, ',', '<')) {  // Left -> previous in focused row
+    if (focusRow == kFocusModeRow) cycleMode(-1);
+    else moveSlot(-1);
     return;
   }
 
-  if (hasWord(status, '.', '>')) {
-    moveSlot(1);
+  if (hasWord(status, '/', '?')) {  // Right -> next in focused row
+    if (focusRow == kFocusModeRow) cycleMode(1);
+    else moveSlot(1);
     return;
   }
 
   if (hasWord(status, 'r', 'R')) {
+    focusRow = kFocusModeRow;
     setSelection(UiMode::Read, selectedSlot);
     return;
   }
 
   if (hasWord(status, 'w', 'W')) {
+    focusRow = kFocusModeRow;
     setSelection(UiMode::Write, selectedSlot);
     return;
   }
 
   if (hasWord(status, 'c', 'C')) {
+    focusRow = kFocusModeRow;
     setSelection(UiMode::Clone, selectedSlot);
     return;
   }
@@ -1578,6 +1768,7 @@ void handleKeyboardUi() {
   for (uint8_t slot = 0; slot < kDumpSlotCount; ++slot) {
     const char key = (char)('1' + slot);
     if (hasWord(status, key)) {
+      focusRow = kFocusSlotRow;
       selectSlot(slot);
       return;
     }
@@ -1801,6 +1992,85 @@ void pollSerialCommands() {
     }
   }
 }
+// Animated boot splash: a radar "ping" of expanding rings out of a card glyph,
+// the product title, a staged progress bar, and the firmware version. Same
+// tactical-terminal palette as the HUD.
+void runBootSequence() {
+  auto& d = M5.Display;
+  const int W = d.width();
+  const int H = d.height();
+  const int cx = 42;   // radar origin (left third)
+  const int cy = 76;
+  const int frames = 22;
+  for (int f = 0; f <= frames; ++f) {
+    d.fillScreen(kColBg);
+
+    // Radar rings first, so the title sits on top of them.
+    for (int w = 0; w < 3; ++w) {
+      const int r = ((f * 4) + w * 14) % 42 + 12;
+      d.drawCircle(cx, cy, r, kColOk);
+    }
+    d.fillRoundRect(cx - 12, cy - 9, 24, 18, 3, kColInfo);
+    d.fillRect(cx - 8, cy - 4, 12, 2, kColBg);
+    d.fillRect(cx - 8, cy, 12, 2, kColBg);
+
+    // Title + subtitle
+    d.setTextSize(2);
+    d.setTextColor(kColOk, kColBg);
+    d.setCursor(W / 2 - 30, 8);
+    d.print("RFID2");
+    d.setTextSize(1);
+    d.setTextColor(kColInfo, kColBg);
+    const char* sub = "CLONE STATION";
+    d.setCursor(W / 2 - (int)strlen(sub) * kGlyphW / 2, 28);
+    d.print(sub);
+
+    // Staged progress bar
+    const int pbX = 12, pbY = H - 26, pbW = W - 24, pbH = 8;
+    d.drawRect(pbX, pbY, pbW, pbH, kColDim);
+    d.fillRect(pbX + 1, pbY + 1, (pbW - 2) * f / frames, pbH - 2, kColOk);
+    d.setTextColor(kColText, kColBg);
+    const char* st = f < 7 ? "BOOT" : (f < 13 ? "microSD" : (f < 18 ? "KEYS / SLOTS" : "READY"));
+    d.setCursor(pbX, pbY - 11);
+    d.print(st);
+
+    // Version footer
+    d.setTextColor(kColDim, kColBg);
+    d.setCursor(4, H - 10);
+    d.print(kFwVersion);
+
+    delay(38);
+  }
+  beep(2600, 30);
+
+  // Persistent splash: stay on the boot screen until the user presses any key
+  // (a serial byte also releases it, so the device remains scriptable). A
+  // blinking prompt is drawn over the now-full progress bar.
+  const int py = H - 26;
+  bool show = true;
+  uint32_t lastBlink = 0;
+  while (true) {
+    M5Cardputer.update();
+    if ((M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || Serial.available() > 0) {
+      break;
+    }
+    if ((uint32_t)(millis() - lastBlink) >= 450) {
+      lastBlink = millis();
+      show = !show;
+      d.fillRect(0, py - 1, W, 12, kColBg);
+      if (show) {
+        const char* p = "PRESS ANY KEY";
+        d.setTextSize(1);
+        d.setTextColor(kColOk, kColBg);
+        d.setCursor(W / 2 - (int)strlen(p) * kGlyphW / 2, py);
+        d.print(p);
+      }
+    }
+    delay(15);
+  }
+  beep(2000, 20);
+}
+
 }  // namespace
 
 void setup() {
@@ -1814,6 +2084,8 @@ void setup() {
   cfg.serial_baudrate = 115200;
   cfg.fallback_board = m5::board_t::board_M5CardputerADV;
   M5Cardputer.begin(cfg, true);
+  M5.Speaker.begin();
+  M5.Speaker.setVolume(160);
   if (M5.Display.height() > M5.Display.width()) {
     M5.Display.setRotation(1);
   }
@@ -1822,16 +2094,20 @@ void setup() {
   Wire.begin(kGroveSda, kGroveScl, kI2cFrequency);
   delay(100);
 
-  // Key dictionary first, then microSD: load persisted slots + any saved keys so
+  // Key dictionary first, then microSD: load persisted slots, keys, and config so
   // they survive a power-cycle. Everything still works if no card is inserted.
   seedDefaultKeyDictionary();
   initSdStorage();
   if (sdReady) {
     loadKeysFromSd();
     loadAllSlotsFromSd();
+    loadConfigFromSd();
   }
-
+  applyBrightness();
   refreshRfidStatus();
+
+  runBootSequence();
+
   if (rfidReady) {
     drawHome(String(sdReady ? "SD ok" : "no SD") + "  FW " + String(kFwVersion));
   } else {

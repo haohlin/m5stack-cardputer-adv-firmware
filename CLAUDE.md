@@ -48,10 +48,9 @@ reader / writer / cloner for the owner's own lab cards.
   on SCK=40/MISO=39/MOSI=14/CS=12. Using `HSPI` for SD collides with the panel
   bus and makes `SD.begin()` fail. SD is purely additive: every SD access is
   guarded by `sdReady`, and all slots/keys work fully in RAM when no card is in.
-  **TODO (unverified):** the FSPI-host fix is not yet confirmed on hardware —
-  `sd_ready` has only been observed `false` (no card inserted during tests).
-  Verify `sd_ready=true` with a FAT-formatted card inserted + a reset; if it still
-  fails, scope the SD CS/pull-up and try the global `SPI` bus or a lower clock.
+  Verified on hardware: with a FAT32 card inserted + reset, `sd_ready=true` and
+  slots/keys/config (`/rfid/slot*.dump`, `keys.txt`, `config.txt`) survive a
+  power-cycle.
 - **Slot model.** 4 `StoredDump` slots (RAM), each a full MIFARE 1K image with
   per-sector working Key A + readable mask. Persisted to `/rfid/slot*.dump` text
   files and reloaded on boot when SD is present; key dictionary persists to
@@ -61,9 +60,13 @@ reader / writer / cloner for the owner's own lab cards.
   dict key (FF first) as Key A, re-selecting after a failed auth. Seeded with
   public defaults in `seedDefaultKeyDictionary()`. Unknown-key sectors are simply
   reported failed (no Crypto1 cracking — see "Future / out of scope" below).
-- **Three modes / actions** (UI tabs READ/WRITE/CLONE; keys `</>` cycle mode,
-  `;`/`.` move slot, `R`/`W`/`C` jump mode, `1-4` slot, Enter run/arm, Del clear,
-  backtick cancel):
+- **Navigation** is two-row: **Up/Down** (`;`/`.`) pick the focused row (mode tabs
+  vs slot strip), **Left/Right** (`,`/`/`) move within it; a left-edge caret marks
+  the focused row (selected items keep their accent colour either way). `R`/`W`/`C`
+  jump mode, `1-4` jump slot, Enter run/arm, Del clear, backtick cancel. **M** opens
+  the options overlay (brightness + 5-level sound, default off; Esc/Back/M closes,
+  saved to `config.txt`). Boot shows an animated splash that waits for any key.
+- **Three modes / actions** (UI tabs READ/WRITE/CLONE):
   - WRITE = safe: data blocks only (no block 0, no trailers), dest auth via dict.
   - CLONE = full: data + block 0/UID via library `MIFARE_OpenUidBackdoor` (gen1a,
     exact 16-byte) with `MIFARE_SetUid` fallback (gen2). **Sector-trailer writing

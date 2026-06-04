@@ -85,12 +85,17 @@ and clear on reset/power-cycle.
 
 Keyboard shortcuts:
 
-- `<` / `>`: cycle mode (READ / WRITE / CLONE).
-- `;` / `.`: choose slot. `1`-`4`: jump to slot.
-- `R` / `W` / `C`: jump to read / write / clone mode.
+- **Up / Down**: pick the focused row — the mode line (READ/WRITE/CLONE) or the
+  slot line. A left-edge caret marks the focused row.
+- **Left / Right**: move within the focused row (change mode, or change slot).
+- `R` / `W` / `C`: jump straight to read / write / clone mode. `1`-`4`: jump to slot.
 - Enter: run selected read, or arm then confirm write/clone.
+- `M`: open Options (brightness + 5-level sound, default off). Up/Down pick,
+  Left/Right adjust; Esc / Back / `M` closes (saved to microSD).
 - Backspace/Del: arm/confirm clearing the selected slot.
 - Backtick: cancel an armed action.
+
+On boot, an animated splash shows until you press any key.
 
 Expected limitations:
 
