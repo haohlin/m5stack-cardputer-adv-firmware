@@ -14,7 +14,7 @@ constexpr char kFwName[] = "cardputer-rfid2-fw";
 // output also read the runtime app description (esp_app_get_description())
 // which is always accurate for the actually-running binary regardless of
 // which OTA slot it was installed to.
-constexpr char kFwVersion[] = "1.5.3";
+constexpr char kFwVersion[] = "1.5.4";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -544,94 +544,111 @@ void drawHome(const String& footer = "") {
 // Options overlay: a focused settings card with a highlighted active row, a
 // segmented brightness meter, and an ON/OFF sound pill. Same tactical-terminal
 // language as the HUD (cyan chrome, accent fills, full-width action bar).
-// Armed sub-page: shown when WRITE or CLONE is armed (after first Enter press)
-// and re-drawn each time pollCardPreview detects a change. Three states:
-//   No card  → "Waiting for card..." + instruction
-//   Card on  → card UID + ENTER to confirm / ` to cancel
-//   (READ overwrite is handled similarly)
+// Armed sub-page: shown while waiting for a card to confirm WRITE / CLONE /
+// READ-overwrite. Re-drawn only when state actually changes so the display
+// is stable even though pollCardPreview fires every 50 ms.
+// Uses M5Canvas sprite → pushed atomically, zero flicker.
+namespace {
+  struct ArmedScreenCache {
+    bool     cardValid  = false;
+    String   cardUid;
+    uint8_t  secsLeft   = 255;  // 255 = undrawn
+    UiMode   mode       = UiMode::Read;
+  } _armedCache;
+}
+
 void drawArmedScreen() {
-  auto& d = M5.Display;
-  const int W = d.width();
-  const int H = d.height();
-  const uint16_t accent = accentForMode(armedMode);
-  resultScreenActive = true;    // keep preview from wiping this screen
+  const int32_t msLeft = (int32_t)(armedUntilMs - millis());
+  const uint8_t secs   = msLeft > 0 ? (uint8_t)(msLeft / 1000) + 1 : 0;
+
+  // Only redraw when something visible changes (card presence, UID, countdown).
+  if (_armedCache.cardValid == lastCard.valid &&
+      _armedCache.cardUid   == lastCard.uid   &&
+      _armedCache.secsLeft  == secs           &&
+      _armedCache.mode      == armedMode) {
+    resultScreenActive = true;  // still keep preview blocked
+    return;
+  }
+  _armedCache.cardValid = lastCard.valid;
+  _armedCache.cardUid   = lastCard.uid;
+  _armedCache.secsLeft  = secs;
+  _armedCache.mode      = armedMode;
+
+  auto& disp = M5.Display;
+  const int W = disp.width();
+  const int H = disp.height();
+  resultScreenActive = true;
+
+  // Render into an off-screen sprite so the push is atomic (no flicker).
+  // If allocation fails, draw directly to the display.
+  M5Canvas cv(&disp);
+  cv.setColorDepth(16);
+  cv.createSprite(W, H);
+  M5GFX& d = cv.width() ? (M5GFX&)cv : disp;
   d.fillScreen(kColBg);
   d.setTextSize(1);
 
-  // Title bar — mode accent
+  const uint16_t accent = accentForMode(armedMode);
+
+  // Title bar
   d.fillRect(0, 0, W, 16, accent);
   d.setTextColor(kColBg, accent);
   d.setCursor(5, 4);
-  const char* modeLabel = (armedMode == UiMode::Write)  ? "WRITE armed" :
-                          (armedMode == UiMode::Clone)  ? "CLONE armed" :
-                                                          "READ overwrite";
-  d.print(modeLabel);
+  d.print(armedMode == UiMode::Write ? "WRITE" :
+          armedMode == UiMode::Clone ? "CLONE" : "READ overwrite");
 
   // Countdown top-right
-  const int32_t msLeft = (int32_t)(armedUntilMs - millis());
-  const uint8_t secs   = msLeft > 0 ? (uint8_t)(msLeft / 1000) + 1 : 0;
   String secsStr = String(secs) + "s";
   d.setCursor(W - (int)secsStr.length() * kGlyphW - 4, 4);
   d.print(secsStr);
 
-  // Slot info row
+  // Slot info
   const StoredDump& dump = storedDumps[armedSlot];
   d.setTextColor(kColInfo, kColBg);
   d.setCursor(4, 22);
   if (dump.valid)
-    d.printf("Slot %u: %ub %us/16  src %s",
+    d.printf("Slot %u: %ub %us/16  %s",
              (unsigned)(armedSlot+1), (unsigned)dump.blocksRead,
-             (unsigned)dump.sectorsRead, dump.sourceUid.substring(0,10).c_str());
+             (unsigned)dump.sectorsRead, dump.sourceUid.substring(0,11).c_str());
   else
     d.printf("Slot %u: empty", (unsigned)(armedSlot+1));
 
-  // Card detection area — main content
+  // Card area
   if (lastCard.valid) {
-    // Card IS present — show it green, ready to confirm
-    d.fillRect(0, 36, W, 20, 0x0420);
+    d.fillRect(0, 36, W, 22, 0x0420);
     d.setTextColor(kColOk, 0x0420);
     d.setCursor(4, 40);
     d.printf("Card: %s", lastCard.uid.c_str());
     d.setTextColor(kColDim, 0x0420);
     d.setCursor(4, 51);
-    d.print(lastCard.typeName.substring(0, 20));
-
-    // Action hint below card info
+    d.print(lastCard.typeName.substring(0, 22));
+    d.setTextColor(kColText, kColBg);
     d.setCursor(4, 62);
-    if (armedMode == UiMode::Clone) {
-      d.setTextColor(kColText, kColBg);
-      d.print("ENTER: clone (needs MAGIC card)");
-    } else if (armedMode == UiMode::Read) {
-      d.setTextColor(kColWrite, kColBg);
-      d.print("ENTER: overwrite slot");
-    } else {
-      d.setTextColor(kColText, kColBg);
-      d.print("ENTER: write to this card");
-    }
+    if      (armedMode == UiMode::Clone) d.print("ENTER to clone  Esc to cancel");
+    else if (armedMode == UiMode::Read)  d.print("ENTER to overwrite  Esc to cancel");
+    else                                 d.print("ENTER to write  Esc to cancel");
   } else {
-    // No card yet — waiting
     d.setTextColor(kColDim, kColBg);
     d.setCursor(W/2 - 8*kGlyphW/2, 44);
     d.print("Waiting...");
     d.setCursor(4, 58);
-    if (armedMode == UiMode::Clone)
-      d.print("Place MAGIC card on reader");
-    else if (armedMode == UiMode::Read)
-      d.print("Place source card on reader");
-    else
-      d.print("Place destination card on reader");
+    if      (armedMode == UiMode::Clone) d.print("Place MAGIC card on reader");
+    else if (armedMode == UiMode::Read)  d.print("Place source card on reader");
+    else                                 d.print("Place destination card on reader");
+    d.setTextColor(kColDim, kColBg);
+    d.setCursor(4, 72);
+    d.print("Esc to cancel");
   }
 
-  // Action bar
+  // Action bar: yellow when card present (ready to confirm), dim otherwise.
   const int barY = H - 13;
   const uint16_t barCol = lastCard.valid ? kColArmed : kColDim;
   d.fillRect(0, barY, W, 13, barCol);
   d.setTextColor(kColBg, barCol);
   d.setCursor(4, barY + 3);
-  if (lastCard.valid)
-    d.print("ENTER confirm  ` cancel");
-  else
-    d.print("` cancel");
+  d.print(lastCard.valid ? "ENTER confirm  Esc cancel" : "Esc cancel");
+
+  if (cv.width()) { cv.pushSprite(0, 0); cv.deleteSprite(); }
 }
 
 void drawOptions() {
@@ -717,6 +734,7 @@ void armSelection(PendingAction action) {
   armedMode = selectedMode;
   armedSlot = selectedSlot;
   armedUntilMs = millis() + kWriteArmWindowMs;
+  _armedCache.secsLeft = 255;  // force redraw on first drawArmedScreen() call
 }
 
 void selectSlot(uint8_t slot) {
@@ -1925,7 +1943,7 @@ void executeSelectedAction() {
       // Enter again to overwrite, or Esc/backtick to keep the existing dump.
       if (storedDumps[selectedSlot].valid && !isArmedAction(PendingAction::ReadOverwrite)) {
         armSelection(PendingAction::ReadOverwrite);
-        emitMessage("armed", "slot has data; Enter=overwrite, `=keep for " + slotTitle(selectedSlot));
+        emitMessage("armed", "slot has data; Enter=overwrite, Esc=keep for " + slotTitle(selectedSlot));
         drawArmedScreen();
         return;
       }
@@ -2168,7 +2186,7 @@ void pollCardPreview() {
       if (storedDumps[selectedSlot].valid) {
         // Slot occupied → arm overwrite prompt; user confirms with Enter or cancels.
         armSelection(PendingAction::ReadOverwrite);
-        emitMessage("auto", "card detected; slot occupied — Enter=overwrite, `=keep");
+        emitMessage("auto", "card detected; slot occupied — Enter=overwrite, Esc=keep");
         drawArmedScreen();
         // Card left selected; arm window ticks down; user presses Enter to read.
         rfid.PICC_HaltA();
