@@ -10,7 +10,7 @@
 
 namespace {
 constexpr char kFwName[] = "cardputer-rfid2-fw";
-constexpr char kFwVersion[] = "1.4.0";
+constexpr char kFwVersion[] = "1.4.1";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -2346,6 +2346,15 @@ void setup() {
   Wire.end();
   Wire.begin(kGroveSda, kGroveScl, kI2cFrequency);
   delay(100);
+
+  // GPIO5 is the LoRa Cap module's SPI CS pin. Both the SD card and the LoRa Cap
+  // share the FSPI bus (SCK=40, MOSI=14, MISO=39). If GPIO5 is floating/LOW at
+  // boot, the LoRa chip asserts itself on FSPI simultaneously with the SD, causing
+  // bus contention and SD.begin() failure. Driving it HIGH deselects the LoRa chip
+  // so the SD card has exclusive access to the bus. Same fix as the M5Stack
+  // Launcher firmware (boards/m5stack-cardputer/interface.cpp line 84-86).
+  pinMode(5, OUTPUT);
+  digitalWrite(5, HIGH);
 
   // Key dictionary first, then microSD: load persisted slots, keys, and config so
   // they survive a power-cycle. Everything still works if no card is inserted.
