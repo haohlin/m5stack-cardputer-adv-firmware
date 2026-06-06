@@ -14,7 +14,7 @@ constexpr char kFwName[] = "cardputer-rfid2-fw";
 // output also read the runtime app description (esp_app_get_description())
 // which is always accurate for the actually-running binary regardless of
 // which OTA slot it was installed to.
-constexpr char kFwVersion[] = "1.5.5";
+constexpr char kFwVersion[] = "1.5.6";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
@@ -1769,22 +1769,40 @@ void cloneStoredDumpToSelectedClassic1k(uint8_t slot) {
     rfid.PCD_StopCrypto1();
   }
 
-  // 2) UID / block 0. Gen1a backdoor writes the exact 16-byte source block 0;
-  //    fall back to MIFARE_SetUid() (UID+BCC) for gen2/CUID cards.
+  // 2) UID / block 0.
+  //
+  // Try 1 — gen1a backdoor: halt → send raw 0x40 (7-bit) + 0x43 magic →
+  //   card enters direct-write mode → MIFARE_Write(block=0). Only works on
+  //   gen1a "magic" cards.
+  //
+  // Try 2 — gen2/CUID direct write: authenticate normally with the dictionary
+  //   key, then MIFARE_Write(block=0) directly. CUID cards allow writes to
+  //   block 0 after a standard auth without any backdoor. This is why
+  //   MIFARE_SetUid() must NOT be used here — that library function calls
+  //   MIFARE_OpenUidBackdoor() internally, making it gen1a-only and causing
+  //   CUID clones to always fail at the UID step.
   if (dump.readable[0]) {
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
+
+    // Attempt 1: gen1a backdoor
     if (wakeAndSelectCard() && rfid.MIFARE_OpenUidBackdoor(false)) {
       magicGen1 = true;
       block0Written = rfid.MIFARE_Write((byte)0, dump.data[0], kClassicBlockSize) == MFRC522_I2C::STATUS_OK;
       if (block0Written) blocksWritten++;
-    } else if (wakeAndSelectCard()) {
-      // SetUid needs the SOURCE UID length, not the destination's. Default to 4
-      // for legacy/unknown dumps that predate sourceUidSize capture.
-      const byte uidLen = (dump.sourceUidSize == 7) ? 7 : 4;
-      block0Written = rfid.MIFARE_SetUid(dump.data[0], uidLen, false);
-      if (block0Written) blocksWritten++;
     }
+
+    // Attempt 2: gen2/CUID — direct authenticated write to block 0
+    if (!block0Written) {
+      rfid.PCD_StopCrypto1();
+      byte sectorKey[kClassicKeySize];
+      if (wakeAndSelectCard() && authenticateSectorWithDictionary(0, sectorKey)) {
+        block0Written = rfid.MIFARE_Write((byte)0, dump.data[0], kClassicBlockSize) == MFRC522_I2C::STATUS_OK;
+        if (block0Written) blocksWritten++;
+        rfid.PCD_StopCrypto1();
+      }
+    }
+
     if (!block0Written) {
       writeFailures++;
       emitBlockError("clone_block0", 0, 0, MFRC522_I2C::STATUS_ERROR);
