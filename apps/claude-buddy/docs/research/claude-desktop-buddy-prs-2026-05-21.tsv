@@ -1,0 +1,21 @@
+21	OPEN	false	2026-05-19T18:03:13Z	cerocca	Port to M5StickC Plus 2 (ESP32-PICO-V3-02, AXP2101)	https://github.com/anthropics/claude-desktop-buddy/pull/21
+20	OPEN	false	2026-05-19T05:20:02Z	skitzo2000	Companion callout	https://github.com/anthropics/claude-desktop-buddy/pull/20
+19	OPEN	false	2026-05-18T17:55:21Z	balloob	Add web installer	https://github.com/anthropics/claude-desktop-buddy/pull/19
+18	CLOSED	false	2026-05-17T08:44:37Z	Bre77	Port firmware from M5StickC Plus to M5 Dial	https://github.com/anthropics/claude-desktop-buddy/pull/18
+17	CLOSED	false	2026-05-14T00:53:46Z	TaoXieSZ	Docs/readme slim	https://github.com/anthropics/claude-desktop-buddy/pull/17
+16	CLOSED	true	2026-05-13T10:20:36Z	openelab-commits	Improve StickS3 GIF clock behavior	https://github.com/anthropics/claude-desktop-buddy/pull/16
+15	OPEN	false	2026-05-09T14:50:01Z	SnowWarri0r	Add a 'task complete' chime on entering celebrate state	https://github.com/anthropics/claude-desktop-buddy/pull/15
+14	OPEN	false	2026-05-08T16:31:26Z	jamesburton	Migrate to M5Unified for M5StickC PLUS2 compatibility	https://github.com/anthropics/claude-desktop-buddy/pull/14
+13	CLOSED	false	2026-05-05T19:26:50Z	wyxpku	Add landscape rotation with split-screen support	https://github.com/anthropics/claude-desktop-buddy/pull/13
+12	OPEN	false	2026-04-30T14:55:48Z	sephxu	Add Claude Code CLI bridge	https://github.com/anthropics/claude-desktop-buddy/pull/12
+11	OPEN	false	2026-04-27T11:38:41Z	rotemrave	Add M5StickC Plus2 support	https://github.com/anthropics/claude-desktop-buddy/pull/11
+10	OPEN	false	2026-04-26T17:09:28Z	SnowWarri0r	Battery: anchor SoC to AXP192 coulomb counter to stop the unplug-jump	https://github.com/anthropics/claude-desktop-buddy/pull/10
+9	CLOSED	false	2026-04-28T19:41:05Z	mfiumara	Add M5StickS3 build target	https://github.com/anthropics/claude-desktop-buddy/pull/9
+8	CLOSED	false	2026-05-02T17:55:16Z	XYLOHEAT	Add M5StickS3 support	https://github.com/anthropics/claude-desktop-buddy/pull/8
+7	CLOSED	false	2026-04-24T16:21:59Z	kukumouse	Update to M5Unified and support M5StickC Plus2	https://github.com/anthropics/claude-desktop-buddy/pull/7
+6	CLOSED	false	2026-04-27T08:19:55Z	yummysource	Add M5 StickS3 (ESP32-S3) support	https://github.com/anthropics/claude-desktop-buddy/pull/6
+5	OPEN	false	2026-04-26T17:11:59Z	SnowWarri0r	Format LittleFS on mount failure so a fresh flash can receive character packs	https://github.com/anthropics/claude-desktop-buddy/pull/5
+4	CLOSED	false	2026-04-19T03:59:55Z	ZinkLu	Phase 2-A: input FSM, menus, passkey UI 	https://github.com/anthropics/claude-desktop-buddy/pull/4
+3	OPEN	false	2026-05-21T08:33:34Z	imliubo	feat: migrate from M5StickCPlus to M5Unified, add M5StickS3 support	https://github.com/anthropics/claude-desktop-buddy/pull/3
+2	CLOSED	false	2026-04-26T16:10:36Z	kangkai550	REFERENCE: clarify which sessions the bridge surfaces	https://github.com/anthropics/claude-desktop-buddy/pull/2
+1	MERGED	false	2026-04-16T23:25:07Z	felixrieseberg	Add screenshots to README and bridge-enable steps to REFERENCE	https://github.com/anthropics/claude-desktop-buddy/pull/1

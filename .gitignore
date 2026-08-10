@@ -1,6 +1,5 @@
+.DS_Store
 .pio/
 .venv/
-.DS_Store
-release/
-__pycache__/
-*.pyc
+dist/
+.cardputer-sd/

@@ -1,0 +1,7 @@
+.pio/
+.venv/
+.vscode/
+.DS_Store
+data/
+get-platformio.py
+release/

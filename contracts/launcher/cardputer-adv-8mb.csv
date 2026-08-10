@@ -1,0 +1,9 @@
+# Pinned Cardputer ADV Launcher contract.
+# Source: cardputer-adv-launcher/support_files/custom_8Mb.csv at launcher.lock commit.
+# Name,   Type, SubType, Offset,   Size, Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+app0,     app,  test,    0x10000,  0x160000,
+app1,     app,  ota_0,   0x170000, 0x4F0000,
+vfs,      data, fat,     0x670000, 0x80000,
+spiffs,   data, spiffs,  0x6F0000, 0x100000,
+coredump, data, coredump,0x7F0000, 0x10000,

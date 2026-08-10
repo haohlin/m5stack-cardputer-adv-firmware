@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tools/cardputer/common.sh
+source "$ROOT/tools/cardputer/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./cardputer apps
+  ./cardputer build <rfid2|claude-buddy>
+  ./cardputer release <rfid2|claude-buddy>
+  ./cardputer stage <rfid2|claude-buddy>
+  ./cardputer install-help
+  ./cardputer debug rfid2 <serial|status|jtag> [serial-port]
+  ./cardputer debug claude-buddy <serial|ble> [serial-port]
+
+Normal install: build/package raw app image, copy it to Launcher USB MSC tools/,
+then select it in Launcher and Install. Direct serial flash is recovery-only.
+EOF
+}
+
+serial_monitor() {
+  local app="$1" port="${2:-}"
+  load_app "$app"
+  port="$("$APP_DIR/scripts/select_cardputer_port.sh" "$port")"
+  exec "$APP_DIR/scripts/pio_local.sh" device monitor -p "$port" -b 115200
+}
+
+case "${1:-}" in
+  apps)
+    echo "rfid2       RFID2 Clone Station"
+    echo "claude-buddy Claude Desktop Buddy"
+    ;;
+  build)
+    [[ $# == 2 ]] || { usage >&2; exit 2; }
+    build_app "$2"
+    ;;
+  release)
+    [[ $# == 2 ]] || { usage >&2; exit 2; }
+    package_app "$2"
+    ;;
+  stage)
+    [[ $# == 2 ]] || { usage >&2; exit 2; }
+    stage_app "$2"
+    ;;
+  install-help)
+    cat <<'EOF'
+1. Boot Launcher; hold a key during app boot to return to it.
+2. Launcher Settings -> USB MSC.
+3. Run: ./cardputer stage <app>
+4. Exit USB MSC, open tools/, select staged .bin, choose Install.
+5. Launcher installs to ota_0 and boots selected app.
+EOF
+    ;;
+  debug)
+    [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
+    app="$2" action="$3" port="${4:-}"
+    case "$app:$action" in
+      rfid2:serial|claude-buddy:serial) serial_monitor "$app" "$port" ;;
+      rfid2:status) exec "$ROOT/apps/rfid2/scripts/watch_status.sh" "$port" ;;
+      rfid2:jtag) exec "$ROOT/apps/rfid2/scripts/jtag_pc_status.sh" ;;
+      claude-buddy:ble)
+        echo "Enable Claude Desktop Developer Mode, open Hardware Buddy picker, then pair Claude-XXXX."
+        ;;
+      *) die "unsupported debug action '$action' for $app" ;;
+    esac
+    ;;
+  -h|--help|help|"") usage ;;
+  *) usage >&2; exit 2 ;;
+esac
