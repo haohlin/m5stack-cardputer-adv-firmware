@@ -54,6 +54,17 @@ firmware_path() {
   printf '%s/%s\n' "$APP_DIR" "$APP_FIRMWARE_REL"
 }
 
+assert_version_contract() {
+  case "$APP_ID" in
+    rfid2)
+      local source_version
+      source_version="$(sed -nE 's/.*kFwVersion\[\] = "([^"]+)".*/\1/p' "$APP_DIR/src/main.cpp")"
+      [[ -n "$source_version" ]] || die "could not read RFID2 kFwVersion"
+      [[ "$source_version" == "$APP_VERSION" ]] || die "RFID2 app.env version $APP_VERSION differs from kFwVersion $source_version"
+      ;;
+  esac
+}
+
 assert_raw_app_image() {
   local image="$1"
   [[ -f "$image" ]] || die "firmware not found: $image"
@@ -79,6 +90,7 @@ package_app() {
   local requested="$1"
   load_contract
   load_app "$requested"
+  assert_version_contract
   # Keep stdout machine-readable: callers capture only the packaged path.
   build_app "$requested" >&2
 

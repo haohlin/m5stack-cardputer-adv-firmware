@@ -9,6 +9,11 @@ driving a **Unit RFID2** (WS1850S / MFRC522-class, I2C `0x28` on the Grove port,
 SDA=G2/SCL=G1). It is a keyboard-driven, slot-based MIFARE Classic 1K
 reader / writer / cloner for the owner's own lab cards.
 
+This is `apps/rfid2` inside M5Stack Cardputer ADV Firmware. Run collection
+commands from repository root (`./cardputer build|release|stage rfid2`); keep
+this app's PlatformIO environment and release version independent from other
+apps. Legacy `v*` tags identify RFID2. New tags use `rfid2-vX.Y.Z`.
+
 ## Deploy flow — THE LAUNCHER ALWAYS STAYS ON THE DEVICE
 
 **Never flash RFID2 (or any user firmware) directly via esptool.**
@@ -17,8 +22,8 @@ are `.bin` files placed on the SD card and installed via the launcher's OTA.
 
 ```
 1. Enable USB MSC on device: launcher → Settings → USB MSC
-2. Run:  ./scripts/flash_cardputer_adv.sh
-         (builds, copies bin to SD tools/, ejects SD)
+2. From collection root run: ./cardputer stage rfid2
+         (builds, validates, copies raw bin to SD tools/, ejects SD)
 3. On device: exit USB MSC → navigate to tools/ → select bin → Install
 4. Launcher OTA flashes it to ota_0. Hold any key at boot to return to launcher.
 ```
@@ -26,11 +31,11 @@ are `.bin` files placed on the SD card and installed via the launcher's OTA.
 SD card layout: `tools/` (RFID2, Claude Buddy…), `games/`, `apps/`, `downloads/`
 
 ```sh
-./scripts/flash_cardputer_adv.sh                      # build + deploy to SD
-./scripts/monitor_cardputer_adv.sh /dev/cu.usbmodem2101   # serial monitor
-./scripts/watch_status.sh /dev/cu.usbmodem2101 --poll 2   # parsed status
-./scripts/send_command.sh "<cmd>" /dev/cu.usbmodem2101    # one-shot serial
-./scripts/pio_local.sh run -e cardputer-adv-rfid2         # build only
+./cardputer stage rfid2                                # build + deploy to SD
+./cardputer debug rfid2 serial /dev/cu.usbmodem2101    # serial monitor
+./cardputer debug rfid2 status /dev/cu.usbmodem2101    # parsed status
+./apps/rfid2/scripts/send_command.sh "<cmd>" /dev/cu.usbmodem2101
+./cardputer build rfid2                                # build only
 ```
 
 esptool is **only** used to restore the launcher if it is ever wiped:

@@ -1,5 +1,9 @@
 # Claude desktop buddy port for m5stack cardputer
 
+Part of [M5Stack Cardputer ADV Firmware](../../README.md). This app keeps its
+own source, dependencies, and version history; new collection tags use
+`claude-buddy-vX.Y.Z`.
+
 > **Physical desk pet for Claude Code / Cowork** — runs on the **M5Stack Cardputer ADV** (ESP32-S3). Approve permission prompts with `Y`/`N` on a real keyboard, watch your pet react to what Claude is doing, get a Mario 1-UP in your ear when an approval is waiting, and flip the device face-down to make it nap.
 
 [![PlatformIO](https://img.shields.io/badge/built_with-PlatformIO-orange.svg)](https://platformio.org/)
@@ -73,7 +77,8 @@ new file in `tools/`; choose Install.
 
 ### Pre-built merged image
 
-Grab the latest merged `.bin` from the [**Releases page**](https://github.com/haohlin/claude-desktop-buddy-m5stack-cardputer-adv/releases/latest) and flash it with either:
+Grab a merged recovery `.bin` from this collection's Releases page and flash it
+only when direct recovery is needed:
 
 **M5Burner** — top-right **Open Custom Firmware** → pick `claude-buddy-cardputer-*.bin` → select your USB serial port → baud `921600` → **Burn**.
 

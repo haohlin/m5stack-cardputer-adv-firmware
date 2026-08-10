@@ -9,12 +9,12 @@
 #include <set>
 
 namespace {
-constexpr char kFwName[] = "cardputer-rfid2-fw";
+constexpr char kFwName[] = "m5stack-cardputer-adv-rfid2";
 // kFwVersion is the human-readable release tag. The boot splash and serial
 // output also read the runtime app description (esp_app_get_description())
 // which is always accurate for the actually-running binary regardless of
 // which OTA slot it was installed to.
-constexpr char kFwVersion[] = "1.5.7";
+constexpr char kFwVersion[] = "1.5.8";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;

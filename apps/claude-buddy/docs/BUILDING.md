@@ -1,6 +1,7 @@
-# Building and Flashing
+# Building, staging, and recovery
 
-This project builds the Cardputer-Adv firmware with PlatformIO.
+This app is part of M5Stack Cardputer ADV Firmware. Normal installation uses
+the collection Launcher-OTA flow; direct serial flash is recovery-only.
 
 The wrapper uses a local `.venv` PlatformIO install when a global `pio` is
 not available. Set `PYTHON_BIN=/path/to/python3.12` if you want to choose the
@@ -9,18 +10,26 @@ Python interpreter explicitly.
 ## Build
 
 ```bash
-./scripts/build_cardputer_adv.sh
+./cardputer build claude-buddy
 ```
 
-The build creates the normal PlatformIO firmware under `.pio/` and a merged image at:
+Run from collection root. The normal artifact is raw app image under `.pio/`;
+release it with provenance manifest:
 
-```text
-release/cardputer-adv-merged.bin
+```bash
+./cardputer release claude-buddy
 ```
 
-That merged binary can be written at flash offset `0x0` and is the file to hand to M5Burner custom firmware.
+## Stage with Launcher
 
-## Flash
+```bash
+./cardputer stage claude-buddy
+```
+
+On device: Launcher → Settings → USB MSC; stage; exit USB MSC; select new
+`tools/` image; Install. This writes app to `ota_0` without replacing Launcher.
+
+## Recovery direct flash
 
 Put the Cardputer-Adv into download mode:
 
@@ -32,7 +41,7 @@ Put the Cardputer-Adv into download mode:
 Then flash:
 
 ```bash
-./scripts/flash_cardputer_adv.sh
+./apps/claude-buddy/scripts/recovery/flash_cardputer_adv.sh
 ```
 
 The script scans USB serial ports. If exactly one device is present, it uses
@@ -42,14 +51,14 @@ one.
 If auto port detection misses the device or you want to bypass the prompt:
 
 ```bash
-./scripts/flash_cardputer_adv.sh /dev/cu.usbmodemXXXX
+./apps/claude-buddy/scripts/recovery/flash_cardputer_adv.sh /dev/cu.usbmodemXXXX
 ```
 
 Clean erase before a first install or when switching firmware families:
 
 ```bash
-./scripts/erase_cardputer_adv.sh
-./scripts/flash_cardputer_adv.sh
+./apps/claude-buddy/scripts/recovery/erase_cardputer_adv.sh
+./apps/claude-buddy/scripts/recovery/flash_cardputer_adv.sh
 ```
 
 ## Flash an Archived Binary
@@ -58,14 +67,14 @@ Archived merged images live under `release/archive/`. Flash one directly without
 rebuilding:
 
 ```bash
-./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin
+./apps/claude-buddy/scripts/recovery/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin
 ```
 
 The binary flash script uses the same USB serial port detection as the normal
 flash script. Pass a port as the second argument to bypass auto-selection:
 
 ```bash
-./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin /dev/cu.usbmodemXXXX
+./apps/claude-buddy/scripts/recovery/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin /dev/cu.usbmodemXXXX
 ```
 
 ## Normal Boot

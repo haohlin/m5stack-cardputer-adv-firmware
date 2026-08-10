@@ -1,5 +1,8 @@
 # Cardputer-Adv RFID2 Firmware
 
+Part of [M5Stack Cardputer ADV Firmware](../../README.md). This app keeps its
+own source, dependencies, release version, and RFID2-focused history.
+
 Standalone firmware for using the M5Stack Unit RFID2 on the Cardputer-Adv Grove
 port with owned MIFARE Classic 1K lab cards.
 
