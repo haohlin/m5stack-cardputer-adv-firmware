@@ -7,7 +7,7 @@ Writes to characters/<name>/ ready to drag onto the Hardware Buddy window.
 Usage:
   python3 tools/prep_character.py <character-dir-or-zip>
 """
-import json, sys, shutil, tempfile, zipfile
+import json, re, sys, shutil, tempfile, zipfile
 from pathlib import Path
 from PIL import Image, ImageSequence
 
@@ -15,17 +15,35 @@ TARGET_W = 96
 REF_W    = 1000   # normalize to this before computing the cross-state bbox
 PROJECT  = Path(__file__).resolve().parent.parent
 OUT_ROOT = PROJECT / "characters"
+SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+def safe_component(name: str, label: str) -> str:
+    if not isinstance(name, str) or not SAFE_NAME.fullmatch(name) or name in (".", ".."):
+        raise ValueError(f"{label} must be one safe path component")
+    return name
+
+
+def safe_child(root: Path, name: str, label: str = "character name") -> Path:
+    safe_component(name, label)
+    resolved_root = root.resolve()
+    candidate = resolved_root / name
+    if candidate.is_symlink():
+        raise ValueError(f"{label} must not be a symlink")
+    if candidate.resolve().parent != resolved_root:
+        raise ValueError(f"{label} must stay inside {resolved_root}")
+    return candidate
 
 
 def _load_normalized(src_path: Path) -> tuple[list[Image.Image], list[int]]:
     """All frames at REF_W width, RGBA, with durations."""
-    im = Image.open(src_path)
     frames, durations = [], []
-    for f in ImageSequence.Iterator(im):
-        durations.append(f.info.get("duration", 100))
-        rgba = f.convert("RGBA").copy()
-        scale = REF_W / rgba.width
-        frames.append(rgba.resize((REF_W, round(rgba.height * scale)), Image.LANCZOS))
+    with Image.open(src_path) as im:
+        for f in ImageSequence.Iterator(im):
+            durations.append(f.info.get("duration", 100))
+            rgba = f.convert("RGBA").copy()
+            scale = REF_W / rgba.width
+            frames.append(rgba.resize((REF_W, round(rgba.height * scale)), Image.LANCZOS))
     return frames, durations
 
 
@@ -64,6 +82,7 @@ def install(src: Path) -> None:
 
     manifest = json.loads((src / "manifest.json").read_text())
     name = manifest["name"]
+    out = safe_child(OUT_ROOT, name)
     bg_hex = manifest.get("colors", {}).get("bg", "#000000").lstrip("#")
     bg_rgb = tuple(int(bg_hex[i:i+2], 16) for i in (0, 2, 4))
 
@@ -71,14 +90,16 @@ def install(src: Path) -> None:
     loaded = []   # (out_name, state_key, frames, durations, src_bytes)
     global_bbox = None
     for state, cfg in manifest["states"].items():
+        safe_component(state, "state name")
         entries = cfg if isinstance(cfg, list) else [cfg]
         for i, entry in enumerate(entries):
-            gif_src = src / entry
+            gif_src = safe_child(src, entry, "state filename")
             if not gif_src.exists():
                 print(f"  skip {state}[{i}]: {entry} not found")
                 continue
             frames, durations = _load_normalized(gif_src)
             out_name = f"{state}_{i}.gif" if len(entries) > 1 else f"{state}.gif"
+            safe_component(out_name, "state output filename")
             loaded.append((out_name, state, frames, durations, gif_src.stat().st_size))
             for f in frames:
                 global_bbox = _union(global_bbox, f.getbbox())
@@ -88,14 +109,13 @@ def install(src: Path) -> None:
     print(f"  global crop: {global_bbox} from {REF_W}-wide reference -> {TARGET_W}x{out_h} on device\n")
 
     # Pass 2: write
-    out = OUT_ROOT / name
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
 
     device_states, total = {}, 0
     for out_name, state, frames, durations, src_bytes in loaded:
-        dst = out / out_name
+        dst = safe_child(out, out_name, "state output filename")
         after = _save_state(frames, durations, dst, global_bbox, bg_rgb)
         total += after
         device_states.setdefault(state, []).append(out_name)

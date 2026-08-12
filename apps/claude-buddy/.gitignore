@@ -5,3 +5,4 @@
 data/
 get-platformio.py
 release/
+__pycache__/

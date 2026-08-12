@@ -21,6 +21,7 @@ static const size_t RX_CAP = 2048;
 static uint8_t  rxBuf[RX_CAP];
 static volatile size_t rxHead = 0;
 static volatile size_t rxTail = 0;
+static portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
 
 static BLEServer*         server = nullptr;
 static BLECharacteristic* txChar = nullptr;
@@ -28,22 +29,30 @@ static BLECharacteristic* rxChar = nullptr;
 static volatile bool      connected = false;
 static volatile bool      secure = false;
 static volatile bool      securityRequired = true;
+static volatile bool      radioEnabled = true;
 static volatile uint32_t  passkey = 0;
 static volatile uint32_t  passkeySinceMs = 0;
 static volatile uint32_t  configuredPasskey = 123456;
 static volatile uint16_t  mtu = 23;
 
 static void rxPush(const uint8_t* p, size_t n) {
+  portENTER_CRITICAL(&rxMux);
+  if (!radioEnabled) {
+    portEXIT_CRITICAL(&rxMux);
+    return;
+  }
   for (size_t i = 0; i < n; i++) {
     size_t next = (rxHead + 1) % RX_CAP;
-    if (next == rxTail) return;  // full — drop (upstream should keep up)
+    if (next == rxTail) break;  // full — drop (upstream should keep up)
     rxBuf[rxHead] = p[i];
     rxHead = next;
   }
+  portEXIT_CRITICAL(&rxMux);
 }
 
 class RxCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* c) override {
+    if (!radioEnabled) return;
     std::string v = c->getValue();
     if (!v.empty()) rxPush((const uint8_t*)v.data(), v.size());
   }
@@ -63,7 +72,7 @@ class ServerCallbacks : public BLEServerCallbacks {
     passkeySinceMs = 0;
     mtu = 23;
     // Restart advertising so the next client can find us.
-    BLEDevice::startAdvertising();
+    if (radioEnabled) BLEDevice::startAdvertising();
   }
   void onMtuChanged(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
     mtu = param->mtu.mtu;
@@ -89,8 +98,9 @@ class SecCallbacks : public BLESecurityCallbacks {
   }
 };
 
-void bleInit(const char* deviceName, bool requireSecurity, uint32_t staticPasskey) {
+void bleInit(const char* deviceName, bool requireSecurity, uint32_t staticPasskey, bool enabled) {
   securityRequired = requireSecurity;
+  radioEnabled = enabled;
   configuredPasskey = staticPasskey % 1000000;
   if (configuredPasskey < 100000) configuredPasskey += 100000;
   secure = !securityRequired;
@@ -147,7 +157,20 @@ void bleInit(const char* deviceName, bool requireSecurity, uint32_t staticPasske
   adv->setScanResponse(true);
   adv->setMinPreferred(0x06);   // iOS-friendly connection interval
   adv->setMaxPreferred(0x12);
-  BLEDevice::startAdvertising();
+  if (radioEnabled) BLEDevice::startAdvertising();
+}
+
+void bleSetEnabled(bool enabled) {
+  radioEnabled = enabled;
+  if (enabled) {
+    BLEDevice::startAdvertising();
+    return;
+  }
+  portENTER_CRITICAL(&rxMux);
+  rxTail = rxHead;
+  portEXIT_CRITICAL(&rxMux);
+  BLEDevice::getAdvertising()->stop();
+  if (connected && server) server->disconnect(server->getConnId());
 }
 
 bool bleConnected() { return connected; }
@@ -172,18 +195,27 @@ void bleClearBonds() {
 }
 
 size_t bleAvailable() {
-  return (rxHead + RX_CAP - rxTail) % RX_CAP;
+  if (!radioEnabled) return 0;
+  portENTER_CRITICAL(&rxMux);
+  const size_t available = (rxHead + RX_CAP - rxTail) % RX_CAP;
+  portEXIT_CRITICAL(&rxMux);
+  return available;
 }
 
 int bleRead() {
-  if (rxHead == rxTail) return -1;
-  int b = rxBuf[rxTail];
-  rxTail = (rxTail + 1) % RX_CAP;
+  if (!radioEnabled) return -1;
+  portENTER_CRITICAL(&rxMux);
+  int b = -1;
+  if (rxHead != rxTail) {
+    b = rxBuf[rxTail];
+    rxTail = (rxTail + 1) % RX_CAP;
+  }
+  portEXIT_CRITICAL(&rxMux);
   return b;
 }
 
 size_t bleWrite(const uint8_t* data, size_t len) {
-  if (!connected || !txChar) return 0;
+  if (!radioEnabled || !connected || !txChar) return 0;
   // ATT notify payload is limited to (MTU - 3). macOS negotiates 185, so
   // the 182-byte chunk works there; use the live mtu so a peer that caps
   // at the 23-byte default doesn't get truncated notifies.

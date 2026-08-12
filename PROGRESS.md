@@ -9,11 +9,13 @@
 - Launcher 8 MB OTA partition contract pinned and compiled by both apps.
 - Direct Buddy serial flash moved to recovery-only tooling.
 - Global Codex skill added for this firmware collection.
+- Claude Buddy BLE, character transfer/parser, status formatting, and host
+  character tools hardened with focused regression coverage.
 
 ## Latest verification
 
 - RFID2 Launcher-OTA build: 611,397 bytes.
-- Claude Buddy Launcher-OTA build: 1,293,277 bytes.
+- Claude Buddy Launcher-OTA security build: 1,294,493 bytes.
 - Both fit Launcher `ota_0` limit: 5,177,344 bytes.
 - Raw image header, release manifest, checksum, and temporary-SD staging passed.
 

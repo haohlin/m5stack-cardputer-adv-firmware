@@ -8,6 +8,7 @@ Usage:
 """
 import json, sys, shutil, subprocess
 from pathlib import Path
+from prep_character import safe_child
 
 PROJECT = Path(__file__).resolve().parent.parent
 DATA    = PROJECT / "data" / "characters"
@@ -15,20 +16,33 @@ CAP     = 1_800_000
 
 
 def flash(src: Path) -> None:
-    if not (src / "manifest.json").exists():
+    if not src.is_dir() or src.is_symlink():
+        sys.exit(f"character pack must be one real directory: {src}")
+    files = []
+    for entry in src.iterdir():
+        if entry.is_symlink() or not entry.is_file():
+            sys.exit(f"character pack must be flat regular files: {entry.name}")
+        safe_child(src, entry.name, "character filename")
+        files.append(entry)
+    manifest = src / "manifest.json"
+    if manifest not in files:
         sys.exit(f"no manifest.json in {src} — run tools/prep_character.py first")
-    name = json.loads((src / "manifest.json").read_text())["name"]
+    name = json.loads(manifest.read_text())["name"]
+    dst = safe_child(DATA, name)
 
-    total = sum(f.stat().st_size for f in src.iterdir() if f.is_file())
+    total = sum(file.stat().st_size for file in files)
     if total > CAP:
         sys.exit(f"{total:,} bytes — over the {CAP:,} LittleFS cap")
 
     # uploadfs flashes everything under data/; the firmware only reads one
     # character at a time, so a stale sibling just wastes partition space.
     if DATA.exists():
+        if DATA.is_symlink():
+            sys.exit(f"refusing symlinked staging directory: {DATA}")
         shutil.rmtree(DATA)
-    dst = DATA / name
-    shutil.copytree(src, dst)
+    dst.mkdir(parents=True)
+    for file in files:
+        shutil.copy2(file, dst / file.name)
     print(f"staged {name}: {total:,} bytes -> {dst}")
 
     subprocess.run(["pio", "run", "-t", "uploadfs"], cwd=PROJECT, check=True)
