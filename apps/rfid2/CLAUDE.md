@@ -42,7 +42,7 @@ esptool is **only** used to restore the launcher if it is ever wiped:
 `0x0 /tmp/launcher-bins/Launcher-m5stack-cardputer.bin`
 - Serial command surface (115200): `status slots next ui mode read|write|clone
   slot <1-4> scan store [slot] [confirm] dump [slot] write [slot] confirm
-  clone [slot] confirm write-block <block> <32hex> keys key add|clear|reset
+  clone [slot] confirm write-block <block> <32hex> confirm keys key add|clear|reset
   trailers on|off sd clear [slot]|all confirm reset-rfid version help`.
 
 ## Architecture (the parts that span files / aren't obvious)

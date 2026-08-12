@@ -1,200 +1,138 @@
 #!/usr/bin/env python3
-"""
-Deploy a firmware .bin to the launcher SD card tools/ folder over WiFi.
+"""Stage RFID2 firmware to a mounted Launcher USB MSC volume.
 
-Usage:
-  launcher_deploy.py <firmware.bin> <sd_name> [--ip 192.168.x.x] [--user admin] [--pass launcher]
-
-  <firmware.bin>  Local path to the .bin to upload
-  <sd_name>       Filename to use on the SD card (e.g. RFID2-Clone-Station-v1.4.1.bin)
-  --ip            Launcher IP (default: read from .launcher_ip or 192.168.1.13)
-  --user          Web UI username (default: admin)
-  --pass          Web UI password (default: launcher)
-
-The script:
-  1. Logs in (cookie-based session, reuses cached cookie in .launcher_session)
-  2. Removes any file in /tools/ matching the same base name prefix (strips version)
-  3. Uploads the new bin to /tools/<sd_name>
-  4. Prints SUCCESS or SKIP (if launcher unreachable)
+This compatibility helper intentionally has no Wi-Fi, HTTP, session-cookie, or
+credential support. Normal project workflows should use ``./cardputer stage
+rfid2`` from the repository root.
 """
 
 import argparse
 import hashlib
-import http.cookiejar
 import os
+from pathlib import Path
 import re
+import shutil
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
-
-DEFAULT_IP   = "192.168.1.13"
-DEFAULT_USER = "admin"
-DEFAULT_PASS = "launcher"
-COOKIE_FILE  = os.path.join(os.path.dirname(__file__), ".launcher_session")
-IP_FILE      = os.path.join(os.path.dirname(__file__), ".launcher_ip")
+import tempfile
 
 
-def load_ip():
-    if os.path.exists(IP_FILE):
-        with open(IP_FILE) as f:
-            ip = f.read().strip()
-            if ip:
-                return ip
-    return DEFAULT_IP
+MAX_FIRMWARE_BYTES = 0x4F0000
+APP_PREFIX = "RFID2-Clone-Station-"
+SAFE_SD_NAME = re.compile(
+    rf"^{re.escape(APP_PREFIX)}v\d+\.\d+(?:\.\d+)?"
+    r"(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.bin$"
+)
 
 
-def save_ip(ip):
-    with open(IP_FILE, "w") as f:
-        f.write(ip)
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-class LauncherClient:
-    def __init__(self, ip, user, password):
-        self.base = f"http://{ip}"
-        self.user = user
-        self.password = password
-        self.jar = http.cookiejar.MozillaCookieJar(COOKIE_FILE)
-        if os.path.exists(COOKIE_FILE):
-            try:
-                self.jar.load(ignore_discard=True, ignore_expires=True)
-            except Exception:
-                pass
-        self.opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(self.jar)
+def validate_firmware(path: Path) -> None:
+    if not path.is_file():
+        raise ValueError(f"firmware not found: {path}")
+    size = path.stat().st_size
+    if size == 0 or size > MAX_FIRMWARE_BYTES:
+        raise ValueError(f"firmware size is outside Launcher limits: {size} bytes")
+    with path.open("rb") as stream:
+        if stream.read(1) != b"\xe9":
+            raise ValueError("firmware does not have an ESP32 image header")
+
+
+def validate_sd_name(name: str) -> None:
+    if not SAFE_SD_NAME.fullmatch(name) or Path(name).name != name:
+        raise ValueError(
+            "sd_name must be an RFID2-Clone-Station-v<version>.bin filename"
         )
 
-    def _save_cookies(self):
-        try:
-            self.jar.save(ignore_discard=True, ignore_expires=True)
-        except Exception:
-            pass
 
-    def _is_authed(self):
-        """Quick probe: a 200 on /systeminfo means the session is still valid."""
-        try:
-            r = self.opener.open(f"{self.base}/systeminfo", timeout=4)
-            body = r.read(20).decode("utf-8", "replace")
-            return r.status == 200 and "VERSION" in body
-        except Exception:
-            return False
-
-    def login(self):
-        if self._is_authed():
-            return True
-        data = urllib.parse.urlencode(
-            {"username": self.user, "password": self.password}
-        ).encode()
-        req = urllib.request.Request(
-            f"{self.base}/login", data=data, method="POST"
-        )
-        req.add_header("Content-Type", "application/x-www-form-urlencoded")
-        try:
-            self.opener.open(req, timeout=5)
-            cookies = {c.name: c.value for c in self.jar}
-            if "ESP32SESSION" in cookies:
-                self._save_cookies()
-                return True
-            return False
-        except Exception:
-            return False
-
-    def list_files(self, folder="/tools"):
-        try:
-            url = f"{self.base}/listfiles?folder={urllib.parse.quote(folder)}"
-            r = self.opener.open(url, timeout=6)
-            return r.read().decode("utf-8", "replace"), r.status
-        except Exception as e:
-            return str(e), 0
-
-    def delete_file(self, path):
-        try:
-            url = f"{self.base}/file?name={urllib.parse.quote(path)}&action=delete"
-            r = self.opener.open(url, timeout=6)
-            return r.read().decode("utf-8", "replace"), r.status
-        except urllib.error.HTTPError as e:
-            return e.read().decode(), e.code
-        except Exception as e:
-            return str(e), 0
-
-    def upload_file(self, sd_folder, sd_filename, local_path):
-        with open(local_path, "rb") as f:
-            data = f.read()
-        boundary = "----LauncherDeploy" + hashlib.md5(sd_filename.encode()).hexdigest()[:8]
-        body = (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="{sd_filename}"\r\n'
-            f"Content-Type: application/octet-stream\r\n\r\n"
-        ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
-        url = f"{self.base}/OTAFILE?folder={urllib.parse.quote(sd_folder)}"
-        req = urllib.request.Request(url, data=body, method="POST")
-        req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-        req.add_header("Content-Length", str(len(body)))
-        try:
-            r = self.opener.open(req, timeout=120)
-            return r.read().decode("utf-8", "replace"), r.status
-        except urllib.error.HTTPError as e:
-            return e.read().decode(), e.code
-        except Exception as e:
-            return str(e), 0
+def launcher_tools(volume: Path) -> Path:
+    if volume.is_symlink() or not volume.is_dir():
+        raise ValueError(f"Launcher volume must be one real directory: {volume}")
+    resolved_volume = volume.resolve(strict=True)
+    tools = resolved_volume / "tools"
+    if tools.is_symlink() or not tools.is_dir():
+        raise ValueError(f"Launcher tools must be one real directory: {tools}")
+    resolved_tools = tools.resolve(strict=True)
+    if resolved_tools.parent != resolved_volume:
+        raise ValueError("Launcher tools must be a direct child of the mounted volume")
+    return resolved_tools
 
 
-def name_prefix(filename):
-    """
-    Strip the version suffix from a firmware filename so we can find and
-    remove the old version.  E.g.:
-      RFID2-Clone-Station-v1.4.0.bin  → RFID2-Clone-Station-
-      Claude-Desktop-Buddy-v1.3.0.bin → Claude-Desktop-Buddy-
-    """
-    return re.sub(r"[-_]?v?\d+\.\d+[\.\d]*\.bin$", "-", filename, flags=re.I)
-
-
-def main():
-    ap = argparse.ArgumentParser(description="Deploy .bin to launcher SD card tools/ folder")
-    ap.add_argument("firmware",  help="Local firmware .bin path")
-    ap.add_argument("sd_name",   help="Filename on SD card, e.g. RFID2-Clone-Station-v1.4.1.bin")
-    ap.add_argument("--ip",   default=None,         help="Launcher IP (default: from .launcher_ip or 192.168.1.13)")
-    ap.add_argument("--user", default=DEFAULT_USER,  help="Web UI user")
-    ap.add_argument("--pass", dest="password", default=DEFAULT_PASS, help="Web UI password")
-    ap.add_argument("--folder", default="/tools", help="SD folder (default: /tools)")
-    args = ap.parse_args()
-
-    ip = args.ip or load_ip()
-    if args.ip:
-        save_ip(args.ip)  # remember for next time
-
-    if not os.path.exists(args.firmware):
-        print(f"[DEPLOY] ERROR: firmware not found: {args.firmware}", file=sys.stderr)
-        sys.exit(1)
-
-    client = LauncherClient(ip, args.user, args.password)
-
-    if not client.login():
-        print(f"[DEPLOY] SKIP: launcher web UI not reachable at {ip} (device not in launcher mode?)")
-        sys.exit(0)   # exit 0 = non-fatal; don't break the build
-
-    # Remove old versions of the same firmware (same prefix, different version)
-    prefix = name_prefix(args.sd_name)
-    listing, _ = client.list_files(args.folder)
-    for line in listing.splitlines():
-        fname = line.strip().rstrip("/")
-        if not fname or fname.startswith(".."):
-            continue
-        if fname.startswith(prefix) and fname.endswith(".bin") and fname != args.sd_name:
-            sd_path = f"{args.folder}/{fname}"
-            resp, code = client.delete_file(sd_path)
-            print(f"[DEPLOY] Removed old: {sd_path} ({code})")
-
-    # Upload the new bin
-    size_kb = os.path.getsize(args.firmware) / 1024
-    print(f"[DEPLOY] Uploading {args.sd_name} ({size_kb:.0f} KB) → {args.folder}/")
-    resp, code = client.upload_file(args.folder, args.sd_name, args.firmware)
-    if code in (200, 201):
-        print(f"[DEPLOY] SUCCESS: {args.folder}/{args.sd_name} on launcher SD")
+def launcher_volume(explicit: str | None) -> Path:
+    if explicit:
+        candidates = [Path(explicit).expanduser()]
     else:
-        print(f"[DEPLOY] WARN: upload returned {code}: {resp[:100]}", file=sys.stderr)
-        sys.exit(1)
+        volumes = Path("/Volumes")
+        candidates = sorted(volumes.iterdir()) if volumes.is_dir() else []
+
+    matches = []
+    for path in candidates:
+        try:
+            launcher_tools(path)
+        except (OSError, ValueError):
+            continue
+        matches.append(path.resolve(strict=True))
+    if len(matches) != 1:
+        raise ValueError("expected exactly one mounted Launcher volume containing tools/")
+    return matches[0]
+
+
+def stage(firmware: Path, sd_name: str, volume: Path) -> Path:
+    validate_sd_name(sd_name)
+    tools = launcher_tools(volume)
+    target = tools / sd_name
+    if target.is_symlink():
+        raise ValueError(f"refusing symlinked Launcher target: {target}")
+    fd, partial_name = tempfile.mkstemp(
+        prefix=f".{sd_name}.", suffix=".partial", dir=tools
+    )
+    partial = Path(partial_name)
+
+    try:
+        with os.fdopen(fd, "wb") as destination, firmware.open("rb") as source:
+            shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+        if sha256(firmware) != sha256(partial):
+            raise OSError("checksum mismatch after staging copy")
+        os.replace(partial, target)
+    finally:
+        if partial.exists():
+            partial.unlink()
+
+    for old in tools.iterdir():
+        if old == target or old.is_symlink() or not old.is_file():
+            continue
+        if SAFE_SD_NAME.fullmatch(old.name):
+            old.unlink()
+    return target
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Stage firmware to Launcher USB storage")
+    parser.add_argument("firmware", help="local ESP32 firmware .bin")
+    parser.add_argument("sd_name", help="safe destination filename under tools/")
+    parser.add_argument("--volume", help="mounted Launcher volume; auto-detected when omitted")
+    args = parser.parse_args()
+
+    try:
+        firmware = Path(args.firmware).expanduser().resolve()
+        validate_sd_name(args.sd_name)
+        validate_firmware(firmware)
+        volume = launcher_volume(args.volume)
+        target = stage(firmware, args.sd_name, volume)
+    except (OSError, ValueError) as error:
+        print(f"[DEPLOY] ERROR: {error}", file=sys.stderr)
+        return 1
+
+    print(f"[DEPLOY] SUCCESS: {target} ({target.stat().st_size} bytes, sha256={sha256(target)})")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

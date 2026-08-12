@@ -54,3 +54,23 @@ outside normal app OTA path.
   files only and rejects directories and symlinks before complete size accounting.
 - Formatted protocol replies transmit only when `snprintf` reports complete
   output within the destination buffer.
+
+## RFID2 security decisions
+
+- Every serial command that mutates card data requires explicit confirmation.
+  `write-block` accepts only an exact trailing `confirm` token, strips it before
+  parsing the existing block and payload fields, and otherwise leaves valid
+  block-write behavior unchanged.
+- Keyboard write, clone, and clear arming uses one rollover-safe 8-second
+  deadline, matching the UI text and limiting unattended destructive state.
+- Persistent slot, key, and configuration inputs are bounded before parsing:
+  files are limited to 16 KiB, lines to 128 characters, and the MIFARE key
+  dictionary to 256 unique entries. Existing valid slot and key formats remain
+  compatible.
+- The legacy deploy helper no longer sends firmware or credentials over HTTP.
+  It stages a local ESP32 image only to a mounted Launcher USB MSC `tools/`
+  directory, verifies SHA-256 from an exclusively created temporary file before
+  atomic replacement, and removes older matching versions only after the new
+  image is safe. The volume and its direct `tools/` child must be real
+  directories, not symlink aliases; cleanup is limited to the fixed
+  `RFID2-Clone-Station-v*` artifact family and skips symlinks.
