@@ -23,7 +23,13 @@
       "env": {
         "CARDPUTER_BRIDGE_PORT": "${user_config.bridge_port}",
         "CARDPUTER_BRIDGE_BIND_HOST": "${user_config.bind_host}",
+        "CARDPUTER_BRIDGE_DEVICE_BIND_HOST": "${user_config.device_bind_host}",
+        "CARDPUTER_BRIDGE_DEVICE_PORT": "${user_config.device_port}",
         "CARDPUTER_PAIRING_TOKEN": "${user_config.pairing_token}",
+        "CARDPUTER_HOOK_TOKEN": "${user_config.hook_token}",
+        "CARDPUTER_BRIDGE_TLS_CERT": "${user_config.tls_cert_path}",
+        "CARDPUTER_BRIDGE_TLS_KEY": "${user_config.tls_key_path}",
+        "CARDPUTER_BRIDGE_TLS_CA": "${user_config.tls_ca_path}",
         "CARDPUTER_VERBOSE": "${user_config.verbose_logging}"
       }
     }
@@ -52,7 +58,7 @@
     "bridge_port": {
       "type": "number",
       "title": "Bridge Port",
-      "description": "Localhost HTTP/WebSocket port for the Cardputer bridge.",
+      "description": "Loopback-only HTTP hook and health port.",
       "default": 17877,
       "min": 1024,
       "max": 65535,
@@ -65,11 +71,52 @@
       "sensitive": true,
       "required": false
     },
+    "hook_token": {
+      "type": "string",
+      "title": "Hook Token",
+      "description": "Optional localhost hook token. Leave blank to generate and persist one locally.",
+      "sensitive": true,
+      "required": false
+    },
     "bind_host": {
       "type": "string",
       "title": "Bind Host",
-      "description": "Network interface for the local bridge. Use 127.0.0.1 for Desktop-only use, or 0.0.0.0 for physical Cardputer Wi-Fi testing on your LAN.",
+      "description": "Deprecated compatibility alias for device_bind_host. Hook and health remain loopback-only.",
       "default": "127.0.0.1",
+      "required": false
+    },
+    "device_bind_host": {
+      "type": "string",
+      "title": "Secure Device Bind Host",
+      "description": "TLS WebSocket interface for Cardputer. Use 0.0.0.0 only on a trusted LAN with configured TLS material.",
+      "default": "127.0.0.1",
+      "required": false
+    },
+    "device_port": {
+      "type": "number",
+      "title": "Secure Device Port",
+      "description": "TLS WebSocket port. Defaults to hook port plus one when omitted.",
+      "min": 1024,
+      "max": 65535,
+      "required": false
+    },
+    "tls_cert_path": {
+      "type": "string",
+      "title": "TLS Certificate Path",
+      "description": "Desktop TLS server certificate PEM path; required for physical Wi-Fi bridge.",
+      "required": false
+    },
+    "tls_key_path": {
+      "type": "string",
+      "title": "TLS Key Path",
+      "description": "Desktop TLS private key PEM path; required for physical Wi-Fi bridge.",
+      "sensitive": true,
+      "required": false
+    },
+    "tls_ca_path": {
+      "type": "string",
+      "title": "Public TLS CA Path",
+      "description": "Public CA PEM path transferred to Cardputer for server certificate validation.",
       "required": false
     },
     "verbose_logging": {

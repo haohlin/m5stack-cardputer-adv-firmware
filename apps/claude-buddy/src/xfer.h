@@ -19,6 +19,7 @@
 static File     _xFile;
 static uint32_t _xExpected = 0, _xWritten = 0;
 static char     _xCharName[24] = "";
+static char     _xPreviousCharName[24] = "";
 static bool     _xActive = false;
 static bool     _xBridgeConfig = false;
 static bool     _xFailed = false;
@@ -26,6 +27,8 @@ static uint32_t _xTotal = 0, _xTotalWritten = 0;
 static uint32_t _xLastActivityMs = 0;
 static constexpr uint32_t XFER_BRIDGE_CONFIG_MAX_BYTES = 4096;
 static constexpr uint32_t XFER_FILESYSTEM_RESERVE_BYTES = 4096;
+static constexpr const char* XFER_CHARACTER_STAGING_DIR = "/characters/incoming";
+static constexpr const char* XFER_CHARACTER_ROLLBACK_DIR = "/characters/rollback";
 
 // Ack goes to both streams — we don't track which one delivered the command,
 // and writes to a clientless SerialBT just drop. The bridge listens on
@@ -86,17 +89,22 @@ static bool _xIsBridgeJsonPath(const char* path) {
 // Only one character lives on the device at a time. Installing a new one
 // under a different name would otherwise leave the old one's files eating
 // space. Wipe everything under /characters/, return total bytes reclaimed.
-static uint32_t _xWipeAllChars() {
+static bool _xIsReservedCharacterDir(const char* name) {
+  return name && (strcmp(name, "incoming") == 0 || strcmp(name, "rollback") == 0);
+}
+
+static void _xWipeAllCharsExcept(const char* keep) {
   File root = LittleFS.open("/characters");
-  if (!root || !root.isDirectory()) { LittleFS.mkdir("/characters"); return 0; }
-  uint32_t freed = 0;
+  if (!root || !root.isDirectory()) { LittleFS.mkdir("/characters"); return; }
   File sub = root.openNextFile();
   while (sub) {
     if (sub.isDirectory()) {
+      const char* name = _xBaseName(sub.name());
+      if (keep && strcmp(name, keep) == 0) { sub.close(); sub = root.openNextFile(); continue; }
       char p[64];
-      snprintf(p, sizeof(p), "/characters/%s", sub.name());
+      snprintf(p, sizeof(p), "/characters/%s", name);
       sub.close();
-      freed += _xWipeDir(p);
+      _xWipeDir(p);
       LittleFS.rmdir(p);
     } else {
       sub.close();
@@ -104,7 +112,29 @@ static uint32_t _xWipeAllChars() {
     sub = root.openNextFile();
   }
   root.close();
-  return freed;
+}
+
+static bool _xFindExistingCharacter(char* out, size_t outLen) {
+  if (!out || outLen == 0) return false;
+  out[0] = 0;
+  File root = LittleFS.open("/characters");
+  if (!root || !root.isDirectory()) return false;
+  File sub = root.openNextFile();
+  while (sub) {
+    if (sub.isDirectory()) {
+      const char* name = _xBaseName(sub.name());
+      if (!_xIsReservedCharacterDir(name) && buddySafePathComponent(name, outLen)) {
+        snprintf(out, outLen, "%s", name);
+        sub.close();
+        root.close();
+        return true;
+      }
+    }
+    sub.close();
+    sub = root.openNextFile();
+  }
+  root.close();
+  return false;
 }
 
 static void _xAbortTransfer() {
@@ -113,10 +143,8 @@ static void _xAbortTransfer() {
   if (_xBridgeConfig) {
     _xWipeBridgeStaging();
   } else if (buddySafePathComponent(_xCharName, sizeof(_xCharName))) {
-    char dir[48];
-    snprintf(dir, sizeof(dir), "/characters/%s", _xCharName);
-    _xWipeDir(dir);
-    LittleFS.rmdir(dir);
+    _xWipeDir(XFER_CHARACTER_STAGING_DIR);
+    LittleFS.rmdir(XFER_CHARACTER_STAGING_DIR);
   }
   _xActive = false;
   _xBridgeConfig = false;
@@ -138,11 +166,10 @@ const char* ownerName();
 #endif
 
 static bool _xSaveBridgeConfigFile(const char* path, char* err, size_t errLen) {
+  // A new authority/config set must never race a live Wi-Fi connection.
+  settings().wifi = false;
+  settingsSave();
   bool ok = bridgeConfigSaveFromFile(path, err, errLen);
-  if (ok) {
-    settings().wifi = false;
-    settingsSave();
-  }
   return ok;
 }
 
@@ -184,10 +211,10 @@ inline bool xferCommand(JsonDocument& doc) {
 
   if (strcmp(cmd, "bridge_config") == 0) {
     char err[48] = "";
+    settings().wifi = false;
+    settingsSave();
     bool ok = bridgeConfigSaveJson(doc, err, sizeof(err));
     if (ok) {
-      settings().wifi = false;
-      settingsSave();
       _xAck("bridge_config", true);
     } else {
       _xAckError("bridge_config", err[0] ? err : "bad bridge config");
@@ -239,7 +266,8 @@ inline bool xferCommand(JsonDocument& doc) {
     if (_xActive) _xAbortTransfer();
     const char* name = doc["name"] | "pet";
     _xTotal = doc["total"] | 0;
-    if (!buddySafePathComponent(name, sizeof(_xCharName))) {
+    if (!buddySafePathComponent(name, sizeof(_xCharName)) ||
+        strcmp(name, "incoming") == 0 || strcmp(name, "rollback") == 0) {
       _xAck("char_begin", false);
       return true;
     }
@@ -268,27 +296,12 @@ inline bool xferCommand(JsonDocument& doc) {
       return true;
     }
 
-    // Fit check: free space after wiping everything under /characters/.
-    // Do the math before touching the filesystem so a failed check leaves
-    // the current character intact.
+    // Replacement stages beside the current character. Do not count the old
+    // pack as available: it remains intact until the staged pack has completed
+    // and parsed successfully.
     uint32_t free = LittleFS.totalBytes() - LittleFS.usedBytes();
-    uint32_t reclaimable = 0;
-    {
-      File r = LittleFS.open("/characters");
-      if (r && r.isDirectory()) {
-        File s = r.openNextFile();
-        while (s) {
-          if (s.isDirectory()) {
-            File f = s.openNextFile();
-            while (f) { reclaimable += f.size(); f.close(); f = s.openNextFile(); }
-          }
-          s.close(); s = r.openNextFile();
-        }
-        r.close();
-      }
-    }
     // Headroom for LittleFS metadata overhead — it's not byte-for-byte.
-    uint32_t available = free + reclaimable;
+    uint32_t available = free;
     if (!buddyTransferFits(_xTotal, available, XFER_FILESYSTEM_RESERVE_BYTES)) {
       char b[96];
       int len = snprintf(b, sizeof(b),
@@ -301,10 +314,11 @@ inline bool xferCommand(JsonDocument& doc) {
     }
 
     snprintf(_xCharName, sizeof(_xCharName), "%s", name);
-    characterClose();
-    _xWipeAllChars();
-    char dir[48]; snprintf(dir, sizeof(dir), "/characters/%s", _xCharName);
-    LittleFS.mkdir(dir);
+    _xFindExistingCharacter(_xPreviousCharName, sizeof(_xPreviousCharName));
+    _xWipeDir(XFER_CHARACTER_STAGING_DIR);
+    LittleFS.rmdir(XFER_CHARACTER_STAGING_DIR);
+    LittleFS.mkdir("/characters");
+    LittleFS.mkdir(XFER_CHARACTER_STAGING_DIR);
     _xTotalWritten = 0;
     _xExpected = 0;
     _xWritten = 0;
@@ -336,12 +350,17 @@ inline bool xferCommand(JsonDocument& doc) {
         _xAck("file", false);
         return true;
       }
+      // A sender may identify a bridge transfer by file name rather than the
+      // character name. Discard the empty character staging area before
+      // switching destinations so it cannot be mistaken for a character later.
+      _xWipeDir(XFER_CHARACTER_STAGING_DIR);
+      LittleFS.rmdir(XFER_CHARACTER_STAGING_DIR);
       _xBridgeConfig = true;
       _xWipeDir("/bridge");
       LittleFS.mkdir("/bridge");
     }
     if (_xBridgeConfig) snprintf(full, sizeof(full), "/bridge/%s", path);
-    else snprintf(full, sizeof(full), "/characters/%s/%s", _xCharName, path);
+    else snprintf(full, sizeof(full), "%s/%s", XFER_CHARACTER_STAGING_DIR, path);
     _xFile = LittleFS.open(full, "w");
     if (!_xFile) _xAbortTransfer();
     else _xLastActivityMs = millis();
@@ -411,14 +430,12 @@ inline bool xferCommand(JsonDocument& doc) {
     }
     _xActive = false;
     char bridgePath[96];
-    snprintf(bridgePath, sizeof(bridgePath), "/characters/%s/bridge.json", _xCharName);
+    snprintf(bridgePath, sizeof(bridgePath), "%s/bridge.json", XFER_CHARACTER_STAGING_DIR);
     if (LittleFS.exists(bridgePath)) {
       char err[48] = "";
       if (ok) ok = _xSaveBridgeConfigFile(bridgePath, err, sizeof(err));
-      char dir[48];
-      snprintf(dir, sizeof(dir), "/characters/%s", _xCharName);
-      _xWipeDir(dir);
-      LittleFS.rmdir(dir);
+      _xWipeDir(XFER_CHARACTER_STAGING_DIR);
+      LittleFS.rmdir(XFER_CHARACTER_STAGING_DIR);
       if (ok) {
         _xAck("char_end", true);
       } else {
@@ -426,8 +443,36 @@ inline bool xferCommand(JsonDocument& doc) {
       }
       return true;
     }
+    // Validate staged files before modifying current character paths.
+    if (ok) {
+      characterClose();
+      ok = characterInit("incoming");
+    }
+    char target[64];
+    snprintf(target, sizeof(target), "/characters/%s", _xCharName);
+    char rollback[64];
+    snprintf(rollback, sizeof(rollback), "%s", XFER_CHARACTER_ROLLBACK_DIR);
+    bool movedOld = false;
+    if (ok && LittleFS.exists(target)) {
+      _xWipeDir(rollback);
+      LittleFS.rmdir(rollback);
+      movedOld = LittleFS.rename(target, rollback);
+      ok = movedOld;
+    }
+    if (ok) ok = LittleFS.rename(XFER_CHARACTER_STAGING_DIR, target);
     if (ok) ok = characterInit(_xCharName);
-    if (!ok) _xAbortTransfer();
+    if (!ok) {
+      if (LittleFS.exists(target)) {
+        _xWipeDir(XFER_CHARACTER_STAGING_DIR);
+        LittleFS.rmdir(XFER_CHARACTER_STAGING_DIR);
+        LittleFS.rename(target, XFER_CHARACTER_STAGING_DIR);
+      }
+      if (movedOld) LittleFS.rename(rollback, target);
+      if (_xPreviousCharName[0]) characterInit(_xPreviousCharName);
+      _xAbortTransfer();
+    } else {
+      _xWipeAllCharsExcept(_xCharName);
+    }
     extern bool buddyMode, gifAvailable;
     if (ok) { buddyMode = false; gifAvailable = true; speciesIdxSave(0xFF); }
     _xAck("char_end", ok);

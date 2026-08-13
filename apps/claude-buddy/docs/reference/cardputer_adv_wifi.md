@@ -143,13 +143,20 @@ Sources:
    is reasonable for the bridge.
 8. Use bounded WebSocket messages and fixed-size buffers. The firmware has no
    PSRAM and is already flash-heavy.
-9. Keep Wi-Fi radio off when the bridge is disabled:
+9. Physical bridge transport is WSS-only: provision `wss://host:port/device`,
+   public PEM CA, and high-entropy pairing token as a complete replacement.
+   Firmware sends bearer token in the upgrade Authorization header and uses
+   CA-validated TLS; do not add insecure TLS or token query compatibility.
+10. Keep hook/health HTTP loopback-only and separate from LAN device listener.
+    Health must remain content-free; hook needs independent local credential and
+    bounded request/pending work before JSON parsing.
+11. Keep Wi-Fi radio off when the bridge is disabled:
    `WiFi.disconnect(true, false)` or equivalent plus `WiFi.mode(WIFI_OFF)`.
-10. Prefer lower TX power during bring-up/testing, then expose a setting only if
+12. Prefer lower TX power during bring-up/testing, then expose a setting only if
     range is a real problem.
-11. Capture reset reason and boot count around Wi-Fi changes. A boot-loop guard
+13. Capture reset reason and boot count around Wi-Fi changes. A boot-loop guard
     is required for all future Wi-Fi features.
-12. For field debugging, capture:
+14. For field debugging, capture:
     - serial ROM reset reason
     - firmware `status` ack
     - bridge `/health`

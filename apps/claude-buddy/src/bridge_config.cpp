@@ -32,11 +32,12 @@ bool hasBadHostChars(const char* host) {
   return false;
 }
 
-bool parseEndpoint(const char* endpoint, char* host, size_t hostLen, uint16_t* port) {
-  if (!endpoint || !endpoint[0]) return false;
-  const char* p = strstr(endpoint, "://");
-  p = p ? p + 3 : endpoint;
+bool parseSecureEndpoint(const char* endpoint, char* host, size_t hostLen, uint16_t* port) {
+  constexpr char kScheme[] = "wss://";
+  if (!endpoint || strncmp(endpoint, kScheme, sizeof(kScheme) - 1) != 0) return false;
+  const char* p = endpoint + sizeof(kScheme) - 1;
   const char* slash = strchr(p, '/');
+  if (!slash || strcmp(slash, "/device") != 0) return false;
   const char* end = slash ? slash : p + strlen(p);
   const char* colon = nullptr;
   for (const char* q = p; q < end; ++q) {
@@ -51,8 +52,15 @@ bool parseEndpoint(const char* endpoint, char* host, size_t hostLen, uint16_t* p
   if (hasBadHostChars(host)) return false;
 
   if (colon) {
-    int parsed = atoi(colon + 1);
-    if (parsed < 1 || parsed > 65535) return false;
+    const char* value = colon + 1;
+    if (value == end) return false;
+    uint32_t parsed = 0;
+    for (const char* q = value; q < end; ++q) {
+      if (*q < '0' || *q > '9') return false;
+      parsed = parsed * 10 + (uint32_t)(*q - '0');
+      if (parsed > 65535) return false;
+    }
+    if (parsed == 0) return false;
     *port = (uint16_t)parsed;
   }
   return true;
@@ -66,8 +74,10 @@ bool validate(const BridgeStoredConfig& cfg, char* error, size_t errorLen) {
   if (!cfg.ssid[0]) return fail("missing ssid");
   if (hasBadHostChars(cfg.host)) return fail("bad host");
   if (cfg.port == 0) return fail("bad port");
-  if (!cfg.token[0]) return fail("missing token");
+  if (strlen(cfg.token) < 24) return fail("weak token");
   if (strstr(cfg.token, "paste-token") || cfg.token[0] == '<') return fail("bad token");
+  if (!strstr(cfg.ca, "-----BEGIN CERTIFICATE-----") ||
+      !strstr(cfg.ca, "-----END CERTIFICATE-----")) return fail("missing ca");
   return true;
 }
 
@@ -83,8 +93,10 @@ bool validateBridgeIdentity(const BridgeStoredConfig& cfg, char* error, size_t e
     return false;
   }
   if (cfg.port == 0) return fail("bad port");
-  if (!cfg.token[0]) return fail("missing token");
+  if (strlen(cfg.token) < 24) return fail("weak token");
   if (strstr(cfg.token, "paste-token") || cfg.token[0] == '<') return fail("bad token");
+  if (!strstr(cfg.ca, "-----BEGIN CERTIFICATE-----") ||
+      !strstr(cfg.ca, "-----END CERTIFICATE-----")) return fail("missing ca");
   return true;
 }
 
@@ -96,6 +108,7 @@ void persist(const BridgeStoredConfig& cfg) {
   prefs.putString("br_host", cfg.host);
   prefs.putUShort("br_port", cfg.port);
   prefs.putString("br_tok", cfg.token);
+  prefs.putString("br_ca", cfg.ca);
   prefs.putBool("br_valid", cfg.valid);
   prefs.end();
 
@@ -108,13 +121,14 @@ void persist(const BridgeStoredConfig& cfg) {
 void bridgeConfigLoad() {
   Preferences prefs;
   memset(&_cfg, 0, sizeof(_cfg));
-  _cfg.port = 17877;
+  _cfg.port = 17878;
   prefs.begin("buddy", true);
   prefs.getString("br_ssid", _cfg.ssid, sizeof(_cfg.ssid));
   prefs.getString("br_pass", _cfg.pass, sizeof(_cfg.pass));
   prefs.getString("br_host", _cfg.host, sizeof(_cfg.host));
   prefs.getString("br_tok", _cfg.token, sizeof(_cfg.token));
-  _cfg.port = prefs.getUShort("br_port", 17877);
+  prefs.getString("br_ca", _cfg.ca, sizeof(_cfg.ca));
+  _cfg.port = prefs.getUShort("br_port", 17878);
   _cfg.valid = prefs.getBool("br_valid", false);
   prefs.end();
 
@@ -143,8 +157,18 @@ bool bridgeConfigSaveJson(JsonDocument& doc, char* error, size_t errorLen) {
     return false;
   };
 
+  // Endpoint authority and bearer credential must be a complete replacement.
+  // Keeping an old token while accepting a caller-provided host enables a
+  // trusted transport peer to redirect the existing credential.
+  const char* endpoint = doc["endpoint"].as<const char*>();
+  const char* token = doc["token"].as<const char*>();
+  const char* ca = doc["ca"].as<const char*>();
+  if (!endpoint || !token || !ca) return fail("endpoint token ca required");
+  if (strlen(token) >= sizeof(_cfg.token)) return fail("token too long");
+  if (strlen(ca) >= sizeof(_cfg.ca)) return fail("ca too long");
+
   BridgeStoredConfig next = _cfg;
-  if (!next.port) next.port = 17877;
+  next.port = 17878;
 
   JsonObject wifi = doc["wifi"].as<JsonObject>();
   const char* ssid = wifi["ssid"].as<const char*>();
@@ -155,23 +179,11 @@ bool bridgeConfigSaveJson(JsonDocument& doc, char* error, size_t errorLen) {
   else if (!wifi["pass"].isNull()) copyField(next.pass, sizeof(next.pass), wifi["pass"].as<const char*>());
   else if (!doc["password"].isNull()) copyField(next.pass, sizeof(next.pass), doc["password"].as<const char*>());
 
-  const char* host = doc["host"].as<const char*>();
-  if (host) copyField(next.host, sizeof(next.host), host);
-
-  if (!doc["port"].isNull()) {
-    uint16_t port = doc["port"] | 0;
-    if (port) next.port = port;
-  }
-
-  const char* endpoint = doc["endpoint"].as<const char*>();
-  if (endpoint) {
-    uint16_t port = next.port ? next.port : 17877;
-    if (!parseEndpoint(endpoint, next.host, sizeof(next.host), &port)) return fail("bad endpoint");
-    next.port = port;
-  }
-
-  const char* token = doc["token"].as<const char*>();
-  if (token) copyField(next.token, sizeof(next.token), token);
+  uint16_t port = 17878;
+  if (!parseSecureEndpoint(endpoint, next.host, sizeof(next.host), &port)) return fail("secure endpoint required");
+  next.port = port;
+  copyField(next.token, sizeof(next.token), token);
+  copyField(next.ca, sizeof(next.ca), ca);
 
   if (!validateBridgeIdentity(next, error, errorLen)) return false;
   char readyError[32];
@@ -205,7 +217,7 @@ bool bridgeConfigSaveWifi(const char* ssid, const char* pass, char* error, size_
   if (!ssid || !ssid[0]) return fail("missing ssid");
 
   BridgeStoredConfig next = _cfg;
-  if (!next.port) next.port = 17877;
+  if (!next.port) next.port = 17878;
   copyField(next.ssid, sizeof(next.ssid), ssid);
   copyField(next.pass, sizeof(next.pass), pass ? pass : "");
 
@@ -224,9 +236,10 @@ void bridgeConfigClear() {
   prefs.remove("br_host");
   prefs.remove("br_port");
   prefs.remove("br_tok");
+  prefs.remove("br_ca");
   prefs.putBool("br_valid", false);
   prefs.end();
   memset(&_cfg, 0, sizeof(_cfg));
-  _cfg.port = 17877;
+  _cfg.port = 17878;
   bump();
 }

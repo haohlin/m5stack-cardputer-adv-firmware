@@ -1,108 +1,54 @@
 # Protocol Notes
 
-This project uses two protocols: Anthropic's official Hardware Buddy BLE
-protocol, and an optional local Wi-Fi bridge protocol for features outside the
-official BLE command surface.
+Claude Buddy has two independent paths.
 
 ## Official Hardware Buddy BLE
 
-The official BLE protocol is unchanged. It supports:
+Official BLE remains normal companion transport: heartbeat snapshots, completed
+turn events, permission decisions, status/name/owner/time/unpair commands, and
+folder push. Unsupported BLE messages remain experimental; BLE does not expose
+arbitrary desktop command execution.
 
-- heartbeat snapshots: `total`, `running`, `waiting`, `msg`, `entries`,
-  `tokens`, `tokens_today`, and pending `prompt`
-- completed assistant `evt:"turn"` events
-- permission decisions: `once` and `deny`
-- status/name/owner/time/unpair commands
-- folder push for character packs and future config folders
+## Optional secure Wi-Fi bridge
 
-It does not officially support:
-
-- prompt submission
-- session creation/switching/continuation
-- answering `AskUserQuestion` options
-- connector approval flows that Claude does not forward as Hardware Buddy
-  prompts
-- arbitrary desktop commands
-
-Unsupported BLE messages, including `{"cmd":"prompt"}`, are experimental only.
-
-## Optional Bridge Protocol
-
-The bridge protocol is JSON over WebSocket. It is opt-in and token-protected.
-
-Default endpoint:
-
-```text
-ws://127.0.0.1:17877/device?token=<pairing-token>
-```
-
-For physical Cardputer Wi-Fi testing, the bridge must be started with an
-explicit LAN bind:
-
-```bash
-CARDPUTER_BRIDGE_BIND_HOST=0.0.0.0 npm run start
-```
-
-The device-side endpoint must use the Mac's LAN IP address, for example:
-
-```text
-ws://192.168.1.10:17877/device?token=<pairing-token>
-```
-
-Generate a `bridge-config` folder with:
-
-```bash
-CARDPUTER_WIFI_SSID="..." CARDPUTER_WIFI_PASS="..." ./scripts/write_bridge_config_folder.sh
-```
-
-Drop that folder onto Claude Desktop Hardware Buddy. The device stores the
-SSID, password, host, port, and token in NVS and keeps using those values until
-another config folder is sent or factory reset clears them.
-
-Every message includes:
+Wi-Fi bridge is opt-in. It is disabled without a complete secure bridge config.
+Device configuration requires all of these values as one replacement:
 
 ```json
-{ "v": 1, "type": "message.kind" }
+{
+  "v": 1,
+  "type": "claude-cardputer-bridge",
+  "endpoint": "wss://192.168.1.10:17878/device",
+  "token": "high-entropy-pairing-token",
+  "ca": "-----BEGIN CERTIFICATE-----\\n...public CA...\\n-----END CERTIFICATE-----\\n"
+}
 ```
 
-Replyable messages also include `id`.
+The device rejects `ws://`, scheme-less endpoints, query tokens, weak tokens,
+missing CA material, partial updates, and legacy saved bridge state. It sends
+the pairing token only in WebSocket `Authorization: Bearer ...` during TLS
+upgrade. Firmware uses CA-validated `beginSslWithCA`; it never enables insecure
+TLS mode.
 
-### Device To Bridge
+Desktop service separates local HTTP from network device transport:
 
-```json
-{ "v": 1, "type": "hello", "device": "Claude-0E65", "fw": "0.2.0" }
-{ "v": 1, "type": "state", "battery": 92, "ble": true, "page": "session" }
-{ "v": 1, "type": "prompt.draft", "id": "draft_1", "text": "short prompt" }
-{ "v": 1, "type": "question.answer", "id": "q_1", "answer": "Approve" }
-{ "v": 1, "type": "voice.text", "id": "voice_1", "text": "summarized speech" }
-```
+- `GET http://127.0.0.1:17877/health` is loopback-only and content-free.
+- `POST http://127.0.0.1:17877/hook` is loopback-only, requires independent
+  bearer hook token, and rejects bodies over 32 KiB.
+- `wss://<host>:17878/device` is separate TLS listener. It requires pairing
+  bearer token and never accepts token query parameters.
 
-### Bridge To Device
+The bridge limits pending Cardputer questions to eight and each request timeout
+to at most 300 seconds. The local relay discovers hook credential only from
+configured environment or protected local bridge config and does not log it.
 
-```json
-{ "v": 1, "type": "bridge.status", "connected": true }
-{ "v": 1, "type": "display.summary", "title": "Claude", "text": "Done" }
-{ "v": 1, "type": "question.request", "id": "q_1", "question": "...", "options": ["Yes", "No"] }
-{ "v": 1, "type": "prompt.result", "id": "draft_1", "status": "queued" }
-{ "v": 1, "type": "session.hint", "text": "Open new Claude session" }
-```
+Provision over USB serial or a `bridge-config` folder only after desktop TLS
+certificate, private key, and public CA have been set. Pairing config contains
+public CA, not private key. Existing bridge configs must be regenerated.
 
-Text fields should stay short enough for a 240x135 display. Longer text may be
-truncated by firmware.
+## At-rest credentials
 
-## Hook Relay Contract
-
-Claude Code/Cowork plugin hooks send their event JSON to the bridge HTTP
-endpoint:
-
-```text
-POST http://127.0.0.1:17877/hook
-```
-
-The bridge may return a hook-compatible JSON object. If the bridge is not
-available or no device answers in time, the hook prints no response and Claude
-falls back to its normal UI.
-
-`AskUserQuestion` and MCP elicitation can be routed through this path. Normal
-Hardware Buddy permission approvals should continue to use official BLE unless
-the user explicitly enables a bridge-mediated workflow later.
+Wi-Fi password and pairing token remain in ESP32 NVS for operation. Repository
+code does not claim source-only encryption. Production devices that need
+physical extraction resistance require secure boot plus flash/NVS encryption
+provisioned before deployment; see collection design and progress records.

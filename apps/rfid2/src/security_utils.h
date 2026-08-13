@@ -37,6 +37,11 @@ inline bool rfidArmStillValid(uint32_t nowMs, uint32_t deadlineMs) {
   return (int32_t)(deadlineMs - nowMs) > 0;
 }
 
+inline bool rfidSerialDestructiveArmValid(uint32_t nowMs, uint32_t deadlineMs,
+                                          bool physicalCardPresent, bool armMatchesSelection) {
+  return physicalCardPresent && armMatchesSelection && rfidArmStillValid(nowMs, deadlineMs);
+}
+
 inline bool rfidPersistFileAllowed(size_t bytes, size_t limit) {
   return bytes <= limit;
 }

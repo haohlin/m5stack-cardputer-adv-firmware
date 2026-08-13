@@ -56,7 +56,7 @@ def load_token() -> str:
         sys.exit(1)
     data = json.loads(path.read_text())
     token = data.get("token", "")
-    if not token:
+    if len(token) < 24:
         print(f"[ERROR] No token in bridge config: {path}", file=sys.stderr)
         sys.exit(1)
     return token
@@ -65,16 +65,24 @@ def load_token() -> str:
 port = sys.argv[1]
 host = default_host()
 bridge_port = int(os.environ.get("CARDPUTER_BRIDGE_PORT", "17877"))
+device_port = int(os.environ.get("CARDPUTER_BRIDGE_DEVICE_PORT", str(bridge_port + 1)))
 token = load_token()
+ca_path = os.environ.get("CARDPUTER_BRIDGE_TLS_CA", "")
+if not ca_path or not Path(ca_path).is_file():
+    print("[ERROR] Set CARDPUTER_BRIDGE_TLS_CA to public PEM CA file used by desktop TLS listener.", file=sys.stderr)
+    sys.exit(1)
+ca = Path(ca_path).read_text()
+if "-----BEGIN CERTIFICATE-----" not in ca or "-----END CERTIFICATE-----" not in ca:
+    print("[ERROR] CARDPUTER_BRIDGE_TLS_CA must contain PEM certificate material.", file=sys.stderr)
+    sys.exit(1)
 
 cmd = {
     "cmd": "bridge_config",
     "v": 1,
     "type": "claude-cardputer-bridge",
-    "endpoint": f"ws://{host}:{bridge_port}/device",
-    "host": host,
-    "port": bridge_port,
+    "endpoint": f"wss://{host}:{device_port}/device",
     "token": token,
+    "ca": ca,
 }
 
 ssid = os.environ.get("CARDPUTER_WIFI_SSID", "")
@@ -87,7 +95,7 @@ if ssid:
 line = (json.dumps(cmd, separators=(",", ":")) + "\n").encode()
 
 print(f"Writing bridge config over USB serial: {port}")
-print(f"Bridge host: {host}:{bridge_port}")
+print(f"Secure bridge host: {host}:{device_port}")
 if ssid:
     print(f"Wi-Fi SSID: {ssid}")
     print("Token/password: configured (hidden)")

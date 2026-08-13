@@ -16,6 +16,7 @@ void resetHarness() {
   _xExpected = 0;
   _xWritten = 0;
   _xCharName[0] = 0;
+  _xPreviousCharName[0] = 0;
   _xActive = false;
   _xBridgeConfig = false;
   _xFailed = false;
@@ -184,25 +185,24 @@ bool testTimeoutAbortsAndRemovesPartialCharacter() {
   send(openFile);
   auto data = chunk("QQ==");
   send(data);
-  CHECK(LittleFS.exists("/characters/safe-pet/idle.gif"));
+  CHECK(LittleFS.exists("/characters/incoming/idle.gif"));
   fakeMillis += 30001;
   xferTick();
   CHECK(!xferActive());
-  CHECK(!LittleFS.exists("/characters/safe-pet/idle.gif"));
-  CHECK(!LittleFS.exists("/characters/safe-pet"));
+  CHECK(!LittleFS.exists("/characters/incoming/idle.gif"));
+  CHECK(!LittleFS.exists("/characters/incoming"));
   return true;
 }
 
 bool testValidBridgeConfigStillSaves() {
   resetHarness();
-  static const char validJson[] = "{\"host\":\"h\",\"token\":\"t\"}";
-  static_assert(sizeof(validJson) - 1 == 24, "fixture length changed");
+  static const char validJson[] = "{\"endpoint\":\"wss://h/device\",\"token\":\"012345678901234567890123\",\"ca\":\"-----BEGIN CERTIFICATE-----x-----END CERTIFICATE-----\"}";
   auto start = begin("bridge-config", sizeof(validJson) - 1);
   send(start);
   CHECK(ackIs("char_begin", true));
   auto openFile = file("bridge.json", sizeof(validJson) - 1);
   send(openFile);
-  auto data = chunk("eyJob3N0IjoiaCIsInRva2VuIjoidCJ9");
+  auto data = chunk("eyJlbmRwb2ludCI6IndzczovL2gvZGV2aWNlIiwidG9rZW4iOiIwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjMiLCJjYSI6Ii0tLS0tQkVHSU4gQ0VSVElGSUNBVEUtLS0tLXgtLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tIn0=");
   send(data);
   auto fileEnd = command("file_end");
   send(fileEnd);
@@ -212,6 +212,69 @@ bool testValidBridgeConfigStillSaves() {
   CHECK(ackIs("char_end", true));
   CHECK(fakeBridgeConfigSaved);
   CHECK(!settings().wifi);
+  return true;
+}
+
+bool testInsecureOrPartialBridgeConfigIsRejected() {
+  const char* payloads[] = {
+      "eyJlbmRwb2ludCI6IndzOi8vaC9kZXZpY2UiLCJ0b2tlbiI6IjAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMyIsImNhIjoiLS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0teC0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0ifQ==",
+      "eyJlbmRwb2ludCI6IndzczovL2gvZGV2aWNlIiwidG9rZW4iOiIwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjMifQ==",
+  };
+  const uint32_t lengths[] = {124, 64};
+  for (size_t i = 0; i < sizeof(payloads) / sizeof(payloads[0]); ++i) {
+    resetHarness();
+    auto start = begin("bridge-config", lengths[i]);
+    send(start);
+    auto openFile = file("bridge.json", lengths[i]);
+    send(openFile);
+    auto data = chunk(payloads[i]);
+    send(data);
+    auto endFile = command("file_end");
+    send(endFile);
+    auto endCharacter = command("char_end");
+    send(endCharacter);
+    CHECK(ackIs("char_end", false));
+    CHECK(!fakeBridgeConfigSaved);
+    CHECK(!LittleFS.exists("/bridge/bridge.json"));
+  }
+  return true;
+}
+
+bool testIncompleteReplacementKeepsActiveCharacter() {
+  resetHarness();
+  LittleFS.seedFile("/characters/live/manifest.json", "old");
+  LittleFS.seedFile("/characters/live/idle.gif", "old-gif");
+  auto start = begin("next", 1);
+  send(start);
+  auto openFile = file("idle.gif", 1);
+  send(openFile);
+  auto data = chunk("QQ==");
+  send(data);
+  fakeMillis += 30001;
+  xferTick();
+  CHECK(LittleFS.readText("/characters/live/manifest.json") == "old");
+  CHECK(LittleFS.readText("/characters/live/idle.gif") == "old-gif");
+  CHECK(!LittleFS.exists("/characters/incoming"));
+  return true;
+}
+
+bool testCompletedReplacementCommitsStagedCharacter() {
+  resetHarness();
+  LittleFS.seedFile("/characters/live/manifest.json", "old");
+  auto start = begin("next", 1);
+  send(start);
+  auto openFile = file("idle.gif", 1);
+  send(openFile);
+  auto data = chunk("QQ==");
+  send(data);
+  auto endFile = command("file_end");
+  send(endFile);
+  auto endCharacter = command("char_end");
+  send(endCharacter);
+  CHECK(ackIs("char_end", true));
+  CHECK(LittleFS.readText("/characters/next/idle.gif") == "A");
+  CHECK(!LittleFS.exists("/characters/live"));
+  CHECK(!LittleFS.exists("/characters/incoming"));
   return true;
 }
 
@@ -229,7 +292,10 @@ int main() {
       {"malformed bridge JSON", testMalformedBridgeJsonIsRejectedAndRemoved},
       {"short write", testShortWriteAbortsAndRemovesPartialCharacter},
       {"timeout", testTimeoutAbortsAndRemovesPartialCharacter},
+      {"incomplete replacement preserves active character", testIncompleteReplacementKeepsActiveCharacter},
+      {"completed replacement commits staged character", testCompletedReplacementCommitsStagedCharacter},
       {"valid bridge config", testValidBridgeConfigStillSaves},
+      {"insecure or partial bridge config", testInsecureOrPartialBridgeConfigIsRejected},
   };
 
   int failures = 0;

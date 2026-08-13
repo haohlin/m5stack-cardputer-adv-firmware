@@ -65,13 +65,32 @@ outside normal app OTA path.
   files only and rejects directories and symlinks before complete size accounting.
 - Formatted protocol replies transmit only when `snprintf` reports complete
   output within the destination buffer.
+- Optional Wi-Fi bridge splits loopback-only HTTP health/hooks from separate
+  TLS WebSocket device listener. Hook/device use independent high-entropy bearer
+  credentials; hook input, pending questions, and timeouts are bounded before
+  parsing. Health exposes no summary, device state, or device identity.
+- Physical Wi-Fi pairing accepts only complete `wss://.../device` replacement
+  config containing endpoint, pairing token, and public PEM CA. Firmware sends
+  token in Authorization header and uses CA-validated `beginSslWithCA`; it
+  rejects legacy `ws://`, query token, weak token, partial update, and missing
+  CA. TLS private key remains desktop-local.
+- Character packs stage in reserved LittleFS. Transfer abort, timeout,
+  malformed input, and incomplete content retain active character; only fully
+  received/parsed pack replaces it. ZIP prep bounds members, compressed and
+  expanded bytes, expansion ratio, safe names, and temporary extraction.
+- Debug bundles redact configured secrets and omit Claude content unless
+  `CARDPUTER_DEBUG_INCLUDE_CONTENT=1`; that private opt-in is not redacted.
+- Wi-Fi password/pairing token require NVS. Source does not establish at-rest
+  encryption: physical extraction resistance needs secure boot plus flash/NVS
+  encryption provisioned and verified outside repository builds. No eFuse state
+  changes occur in normal workflow.
 
 ## RFID2 security decisions
 
-- Every serial command that mutates card data requires explicit confirmation.
-  `write-block` accepts only an exact trailing `confirm` token, strips it before
-  parsing the existing block and payload fields, and otherwise leaves valid
-  block-write behavior unchanged.
+- Serial command confirmation uses one exact trailing `confirm` token; substring
+  forms are never accepted. `write` and `clone` have a matching physical UI arm
+  requirement, while serial literal `write-block` is rejected rather than given
+  an unsafe bypass around the physical UI workflow.
 - Keyboard write, clone, and clear arming uses one rollover-safe 8-second
   deadline, matching the UI text and limiting unattended destructive state.
 - Persistent slot, key, and configuration inputs are bounded before parsing:
@@ -85,3 +104,10 @@ outside normal app OTA path.
   image is safe. The volume and its direct `tools/` child must be real
   directories, not symlink aliases; cleanup is limited to the fixed
   `RFID2-Clone-Station-v*` artifact family and skips symlinks.
+- Serial `write`/`clone` require exact trailing `confirm` plus matching fresh
+  physical UI arm, target slot, and present card inside eight-second window.
+  Serial literal `write-block` is disabled because arbitrary payload has no
+  existing physical UI arm. Physical UI write/clone behavior remains unchanged.
+- RFID dump/key data on removable microSD and USB serial is owner-operated lab
+  data. This release does not claim encrypted storage; confidential deployments
+  need user-approved encrypted storage or hardware-backed key design.

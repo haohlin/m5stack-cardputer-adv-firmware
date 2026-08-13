@@ -17,7 +17,7 @@
 #endif
 
 #ifndef CARDPUTER_BRIDGE_PORT
-#define CARDPUTER_BRIDGE_PORT 17877
+#define CARDPUTER_BRIDGE_PORT 17878
 #endif
 
 #ifndef CARDPUTER_BRIDGE_FW_LABEL
@@ -65,6 +65,7 @@ char _status[24] = "wifi off";
 char _lastMessage[96] = "";
 char _lastEvent[20] = "-";
 char _lastIp[16] = "-";
+char _authHeader[128] = "";
 
 const char* phaseName(uint8_t phase) {
   switch (phase) {
@@ -121,24 +122,6 @@ void setLast(const char* s) {
 void setEvent(const char* s) {
   strncpy(_lastEvent, s ? s : "-", sizeof(_lastEvent) - 1);
   _lastEvent[sizeof(_lastEvent) - 1] = 0;
-}
-
-String urlEncode(const char* raw) {
-  const char* hex = "0123456789ABCDEF";
-  String out;
-  for (const char* p = raw; *p; ++p) {
-    uint8_t c = (uint8_t)*p;
-    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-        (c >= '0' && c <= '9') || c == '-' || c == '_' ||
-        c == '.' || c == '~') {
-      out += (char)c;
-    } else {
-      out += '%';
-      out += hex[(c >> 4) & 0x0F];
-      out += hex[c & 0x0F];
-    }
-  }
-  return out;
 }
 
 void sendHello() {
@@ -252,7 +235,7 @@ bool runtimeConfig(BridgeStoredConfig* out) {
     if (out) *out = bridgeConfig();
     return true;
   }
-#ifdef CARDPUTER_BRIDGE_WIFI_SSID
+#if defined(CARDPUTER_BRIDGE_WIFI_SSID) && defined(CARDPUTER_BRIDGE_CA)
   if (out) {
     memset(out, 0, sizeof(*out));
     out->valid = true;
@@ -261,6 +244,7 @@ bool runtimeConfig(BridgeStoredConfig* out) {
     strncpy(out->host, CARDPUTER_BRIDGE_HOST, sizeof(out->host) - 1);
     out->port = CARDPUTER_BRIDGE_PORT;
     strncpy(out->token, CARDPUTER_BRIDGE_TOKEN, sizeof(out->token) - 1);
+    strncpy(out->ca, CARDPUTER_BRIDGE_CA, sizeof(out->ca) - 1);
   }
   return true;
 #else
@@ -358,9 +342,12 @@ void bridgeWifiPoll(bool enabled, bool bleLinked, const char* pageName, uint8_t 
   }
 
   if (!_wsStarted) {
-    String path = "/device?token=" + urlEncode(cfg.token);
+    // `beginSSL` without a CA deliberately calls insecure TLS in this
+    // dependency. Only the CA-validated variant is allowed for Wi-Fi bridge.
+    snprintf(_authHeader, sizeof(_authHeader), "Authorization: Bearer %s\r\n", cfg.token);
     markPhase(WIFI_DIAG_WS_BEGIN);
-    _ws.begin(cfg.host, cfg.port, path.c_str());
+    _ws.setExtraHeaders(_authHeader);
+    _ws.beginSslWithCA(cfg.host, cfg.port, "/device", cfg.ca);
     _ws.onEvent(webSocketEvent);
     _ws.setReconnectInterval(5000);
     _wsStarted = true;

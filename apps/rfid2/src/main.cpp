@@ -1969,16 +1969,31 @@ String commandTail(const String& command, const char* verb) {
 }
 
 bool consumeConfirm(String& tail) {
-  const bool confirmed = tail.indexOf("confirm") >= 0;
-  tail.replace("confirm", "");
+  const size_t bodyLength = rfidConfirmedCommandLength(tail.c_str());
+  if (!bodyLength) return false;
+  tail = tail.substring(0, bodyLength);
   tail.trim();
-  return confirmed;
+  return true;
 }
 
 int parseOptionalSlot(String tail, bool& confirmed) {
   confirmed = consumeConfirm(tail);
   if (!tail.length()) return selectedSlot;
   return parseSlotNumber(tail);
+}
+
+bool serialDestructiveArmMatches(PendingAction action, UiMode mode, uint8_t slot) {
+  const bool selectionMatches = selectedMode == mode && selectedSlot == slot &&
+                                armedMode == mode && armedSlot == slot &&
+                                pendingAction == action;
+  return rfidSerialDestructiveArmValid(millis(), armedUntilMs, lastCard.valid, selectionMatches);
+}
+
+void serialArmRequired(const char* operation, uint8_t slot) {
+  const String title = String(operation) + " blocked";
+  emitMessage("error", title + ": arm matching " + slotTitle(slot) +
+                         " on physical UI, keep card present, then resend within 8s");
+  drawLines(title.c_str(), slotTitle(slot), "Arm on device UI", "Keep card present");
 }
 
 void executeSelectedAction() {
@@ -2346,8 +2361,10 @@ void processCommand(String command) {
     } else if (!confirmed) {
       emitMessage("error", "write requires explicit confirm: write " + String(parsedSlot + 1) + " confirm");
       drawLines("Write blocked", slotSummary((uint8_t)parsedSlot), "Serial needs confirm");
+    } else if (!serialDestructiveArmMatches(PendingAction::WriteSlot, UiMode::Write, (uint8_t)parsedSlot)) {
+      serialArmRequired("write", (uint8_t)parsedSlot);
     } else {
-      setSelection(UiMode::Write, (uint8_t)parsedSlot);
+      cancelArm();
       writeStoredDumpToPresentClassic1k((uint8_t)parsedSlot);
     }
   } else if (command.startsWith("write-block ")) {
@@ -2356,7 +2373,8 @@ void processCommand(String command) {
       emitMessage("error", "write-block requires explicit confirm");
       drawLines("Write blocked", "Serial needs confirm", "write-block ... confirm");
     } else {
-      writeLiteralDataBlock(command.substring(0, confirmedLength));
+      emitMessage("error", "write-block is serial-disabled; use physical UI full-slot write");
+      drawLines("Write blocked", "Serial literal writes disabled", "Use device UI");
     }
   } else if (command == "clone" || command.startsWith("clone ")) {
     bool confirmed = false;
@@ -2366,8 +2384,10 @@ void processCommand(String command) {
     } else if (!confirmed) {
       emitMessage("error", "clone rewrites UID/block 0 and needs a MAGIC card; confirm: clone " + String(parsedSlot + 1) + " confirm");
       drawLines("Clone blocked", slotSummary((uint8_t)parsedSlot), "Serial needs confirm", "needs MAGIC card");
+    } else if (!serialDestructiveArmMatches(PendingAction::CloneSlot, UiMode::Clone, (uint8_t)parsedSlot)) {
+      serialArmRequired("clone", (uint8_t)parsedSlot);
     } else {
-      setSelection(UiMode::Clone, (uint8_t)parsedSlot);
+      cancelArm();
       cloneStoredDumpToPresentClassic1k((uint8_t)parsedSlot);
     }
   } else if (command == "keys") {

@@ -34,6 +34,7 @@ class FakeLittleFS {
   bool mkdir(const char* path);
   bool remove(const char* path);
   bool rmdir(const char* path);
+  bool rename(const char* from, const char* to);
   bool exists(const char* path) const;
   size_t totalBytes() const { return capacity; }
   size_t usedBytes() const;
@@ -151,6 +152,31 @@ inline bool FakeLittleFS::rmdir(const char* rawPath) {
     if (directory != path && directory.rfind(prefix, 0) == 0) return false;
   }
   return directories.erase(path) != 0;
+}
+
+inline bool FakeLittleFS::rename(const char* rawFrom, const char* rawTo) {
+  if (!rawFrom || !rawTo) return false;
+  const std::string from(rawFrom), to(rawTo);
+  if (exists(to.c_str()) || (!directories.count(from) && !files.count(from))) return false;
+  const std::string prefix = from + "/";
+  const std::string replacement = to + "/";
+  std::vector<std::pair<std::string, std::vector<uint8_t>>> movedFiles;
+  std::vector<std::string> movedDirectories;
+  for (const auto& file : files) {
+    if (file.first == from || file.first.rfind(prefix, 0) == 0) {
+      movedFiles.push_back({file.first == from ? to : replacement + file.first.substr(prefix.size()), file.second});
+    }
+  }
+  for (const auto& directory : directories) {
+    if (directory == from || directory.rfind(prefix, 0) == 0) {
+      movedDirectories.push_back(directory == from ? to : replacement + directory.substr(prefix.size()));
+    }
+  }
+  for (const auto& file : movedFiles) files.erase(file.first == to ? from : prefix + file.first.substr(replacement.size()));
+  for (const auto& directory : movedDirectories) directories.erase(directory == to ? from : prefix + directory.substr(replacement.size()));
+  for (const auto& file : movedFiles) files[file.first] = file.second;
+  for (const auto& directory : movedDirectories) directories.insert(directory);
+  return true;
 }
 
 inline bool FakeLittleFS::exists(const char* rawPath) const {
@@ -290,8 +316,10 @@ inline bool fakeBridgeConfigSaved = false;
 inline bool bridgeConfigSaveFromFile(const char* path, char* error, size_t errorLength) {
   const std::string contents = LittleFS.readText(path ? path : "");
   const bool valid = !contents.empty() && contents.front() == '{' && contents.back() == '}' &&
-                     contents.find("\"host\"") != std::string::npos &&
-                     contents.find("\"token\"") != std::string::npos;
+                     contents.find("\"endpoint\":\"wss://") != std::string::npos &&
+                     contents.find("\"token\":\"012345678901234567890123\"") != std::string::npos &&
+                     contents.find("-----BEGIN CERTIFICATE-----") != std::string::npos &&
+                     contents.find("-----END CERTIFICATE-----") != std::string::npos;
   fakeBridgeConfigSaved = valid;
   if (!valid && error && errorLength) std::snprintf(error, errorLength, "%s", "bad json");
   return valid;

@@ -66,7 +66,9 @@ default_ssid() {
 ensure_bridge_config
 
 TOKEN="${CARDPUTER_BRIDGE_TOKEN:-$(node -e 'const fs=require("fs"); const p=process.env.CARDPUTER_BRIDGE_CONFIG || `${process.env.HOME}/.claude-cardputer-bridge/config.json`; process.stdout.write(JSON.parse(fs.readFileSync(p, "utf8")).token || "");')}"
-PORT="${CARDPUTER_BRIDGE_PORT:-17877}"
+HOOK_PORT="${CARDPUTER_BRIDGE_PORT:-17877}"
+PORT="${CARDPUTER_BRIDGE_DEVICE_PORT:-$((HOOK_PORT + 1))}"
+CA_FILE="${CARDPUTER_BRIDGE_TLS_CA:-}"
 HOST="$(default_host)"
 WIFI_ON_DEVICE="${CARDPUTER_WIFI_ON_DEVICE:-}"
 if [[ "$WIFI_ON_DEVICE" == "1" ]]; then
@@ -77,8 +79,17 @@ else
   PASS="${CARDPUTER_WIFI_PASS:-}"
 fi
 
-if [[ -z "$TOKEN" ]]; then
+if [[ ${#TOKEN} -lt 24 ]]; then
   echo "No bridge token found. Start or print the bridge config first." >&2
+  exit 1
+fi
+if [[ -z "$CA_FILE" || ! -f "$CA_FILE" ]]; then
+  echo "Set CARDPUTER_BRIDGE_TLS_CA to public PEM CA file used by desktop TLS listener." >&2
+  exit 1
+fi
+CA="$(<"$CA_FILE")"
+if [[ "$CA" != *"-----BEGIN CERTIFICATE-----"* || "$CA" != *"-----END CERTIFICATE-----"* ]]; then
+  echo "CARDPUTER_BRIDGE_TLS_CA must contain PEM certificate material." >&2
   exit 1
 fi
 
@@ -93,7 +104,10 @@ if [[ -n "$SSID" && -z "$PASS" ]]; then
   printf '\n' >&2
 fi
 
-rm -rf "$OUT"
+if [[ -e "$OUT" ]]; then
+  echo "Refusing to overwrite existing bridge config folder: $OUT" >&2
+  exit 1
+fi
 mkdir -p "$OUT"
 
 cat > "$OUT/manifest.json" <<EOF
@@ -121,17 +135,15 @@ cat > "$OUT/bridge.json" <<EOF
 {
   "v": 1,
   "type": "claude-cardputer-bridge",
-  "endpoint": "ws://$(json_escape "$HOST"):$PORT/device",
-  "host": "$(json_escape "$HOST")",
-  "port": $PORT,
-  "token": "$(json_escape "$TOKEN")"$wifi_json
+  "endpoint": "wss://$(json_escape "$HOST"):$PORT/device",
+  "token": "$(json_escape "$TOKEN")",
+  "ca": "$(json_escape "$CA")"$wifi_json
 }
 EOF
 
 chmod 600 "$OUT/bridge.json"
-find "$OUT" -name '.DS_Store' -delete
 echo "Wrote bridge config folder: $OUT"
-echo "Bridge host: $HOST:$PORT"
+echo "Secure bridge host: $HOST:$PORT"
 if [[ -n "$SSID" ]]; then
   echo "Wi-Fi SSID: $SSID"
   echo "Token/password: configured (hidden)"

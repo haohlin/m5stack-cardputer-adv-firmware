@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from PIL import Image
@@ -105,6 +106,45 @@ class ClaudeBuddySecurityTests(unittest.TestCase):
             self.assertTrue((output / "idle.gif").is_file())
             self.assertEqual(json.loads((output / "manifest.json").read_text())["name"], "safe-pet")
 
+    def test_prep_rejects_unsafe_or_expanding_zip_before_extracting(self):
+        prep = load_module("prep_character_zip", BUDDY / "tools" / "prep_character.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            unsafe = root / "unsafe.zip"
+            with zipfile.ZipFile(unsafe, "w") as archive:
+                archive.writestr("../escaped", "no")
+            with self.assertRaisesRegex(ValueError, "unsafe member"):
+                prep.extract_character_zip(unsafe, root / "extract-unsafe")
+            self.assertFalse((root / "escaped").exists())
+
+            nonregular = root / "nonregular.zip"
+            info = zipfile.ZipInfo("device")
+            info.external_attr = (0o060000 << 16)  # block-device type, not a regular pack file
+            with zipfile.ZipFile(nonregular, "w") as archive:
+                archive.writestr(info, "no")
+            with self.assertRaisesRegex(ValueError, "unsafe member"):
+                prep.extract_character_zip(nonregular, root / "extract-nonregular")
+
+            expanding = root / "expanding.zip"
+            with zipfile.ZipFile(expanding, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("manifest.json", '{"name":"safe-pet","states":{}}')
+                archive.writestr("idle.gif", b"x" * 200_000)
+            with self.assertRaisesRegex(ValueError, "expansion ratio"):
+                prep.extract_character_zip(expanding, root / "extract-expanding")
+
+    def test_prep_extracts_valid_bounded_zip(self):
+        prep = load_module("prep_character_zip_valid", BUDDY / "tools" / "prep_character.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "valid.zip"
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr("pack/manifest.json", '{"name":"safe-pet","states":{}}')
+                archive.writestr("pack/idle.gif", b"GIF89a")
+            output = root / "extract-valid"
+            pack = prep.extract_character_zip(source, output)
+            self.assertEqual(pack, output / "pack")
+            self.assertEqual((pack / "idle.gif").read_bytes(), b"GIF89a")
+
     def test_prep_rejects_state_name_outside_character_directory(self):
         prep = load_module("prep_character_state", BUDDY / "tools" / "prep_character.py")
         with tempfile.TemporaryDirectory() as tmp:
@@ -168,6 +208,17 @@ class ClaudeBuddySecurityTests(unittest.TestCase):
         self.assertIn('prefs.putString("br_tok", cfg.token);', config)
         self.assertIn('out[key] = "<redacted>"', bundle)
         self.assertNotIn('print(cfg.token)', config)
+
+    def test_bridge_requires_complete_ca_validated_config(self):
+        config = (BUDDY / "src" / "bridge_config.cpp").read_text()
+        wifi = (BUDDY / "src" / "bridge_wifi.cpp").read_text()
+        self.assertIn('constexpr char kScheme[] = "wss://"', config)
+        self.assertIn('"endpoint token ca required"', config)
+        self.assertIn('"secure endpoint required"', config)
+        self.assertIn('"missing ca"', config)
+        self.assertIn('beginSslWithCA(cfg.host, cfg.port, "/device", cfg.ca)', wifi)
+        self.assertIn('"Authorization: Bearer %s\\r\\n"', wifi)
+        self.assertNotIn('_ws.begin(cfg.host', wifi)
 
     def test_launcher_environment_includes_websocket_dependency(self):
         ini = (BUDDY / "platformio.ini").read_text()

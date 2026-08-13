@@ -17,7 +17,7 @@ ensure_bridge_config() {
 }
 
 c_escape() {
-  node -e 'process.stdout.write(String(process.argv[1] || "").replace(/\\/g, "\\\\").replace(/"/g, "\\\""))' "$1"
+  node -e 'process.stdout.write(String(process.argv[1] || "").replace(/\\/g, "\\\\").replace(/\r?\n/g, "\\n").replace(/"/g, "\\\""))' "$1"
 }
 
 default_host() {
@@ -66,13 +66,24 @@ default_ssid() {
 ensure_bridge_config
 
 TOKEN="${CARDPUTER_BRIDGE_TOKEN:-$(node -e 'const fs=require("fs"); const p=process.env.CARDPUTER_BRIDGE_CONFIG || `${process.env.HOME}/.claude-cardputer-bridge/config.json`; process.stdout.write(JSON.parse(fs.readFileSync(p, "utf8")).token || "");')}"
-PORT="${CARDPUTER_BRIDGE_PORT:-17877}"
+HOOK_PORT="${CARDPUTER_BRIDGE_PORT:-17877}"
+PORT="${CARDPUTER_BRIDGE_DEVICE_PORT:-$((HOOK_PORT + 1))}"
+CA_FILE="${CARDPUTER_BRIDGE_TLS_CA:-}"
 HOST="$(default_host)"
 SSID="$(default_ssid)"
 PASS="${CARDPUTER_WIFI_PASS:-}"
 
-if [[ -z "$TOKEN" ]]; then
+if [[ ${#TOKEN} -lt 24 ]]; then
   echo "No bridge token found. Start or print the bridge config first." >&2
+  exit 1
+fi
+if [[ -z "$CA_FILE" || ! -f "$CA_FILE" ]]; then
+  echo "Set CARDPUTER_BRIDGE_TLS_CA to public PEM CA file used by desktop TLS listener." >&2
+  exit 1
+fi
+CA="$(<"$CA_FILE")"
+if [[ "$CA" != *"-----BEGIN CERTIFICATE-----"* || "$CA" != *"-----END CERTIFICATE-----"* ]]; then
+  echo "CARDPUTER_BRIDGE_TLS_CA must contain PEM certificate material." >&2
   exit 1
 fi
 
@@ -99,6 +110,7 @@ cat > "$OUT" <<EOF
 #define CARDPUTER_BRIDGE_HOST "$(c_escape "$HOST")"
 #define CARDPUTER_BRIDGE_PORT $PORT
 #define CARDPUTER_BRIDGE_TOKEN "$(c_escape "$TOKEN")"
+#define CARDPUTER_BRIDGE_CA "$(c_escape "$CA")"
 #define CARDPUTER_BRIDGE_FW_LABEL "cardputer-adv-bridge-dev"
 EOF
 

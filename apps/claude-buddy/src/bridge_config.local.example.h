@@ -9,6 +9,7 @@
 #define CARDPUTER_BRIDGE_WIFI_SSID "YourWiFi"
 #define CARDPUTER_BRIDGE_WIFI_PASS "YourWiFiPassword"
 #define CARDPUTER_BRIDGE_HOST "192.168.1.10"
-#define CARDPUTER_BRIDGE_PORT 17877
+#define CARDPUTER_BRIDGE_PORT 17878
 #define CARDPUTER_BRIDGE_TOKEN "paste-token-from-bridge-config-json"
+#define CARDPUTER_BRIDGE_CA "-----BEGIN CERTIFICATE-----\npublic-ca-pem\n-----END CERTIFICATE-----\n"
 #define CARDPUTER_BRIDGE_FW_LABEL "cardputer-adv-bridge-dev"

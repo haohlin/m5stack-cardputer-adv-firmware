@@ -29,8 +29,9 @@ From the collection repository root, use the Launcher workflow:
 ./cardputer debug claude-buddy serial
 ./cardputer debug claude-buddy ble
 
-# Optional Wi-Fi bridge config folder for local physical-device testing
+# Optional secure Wi-Fi bridge config. TLS vars must match desktop listener.
 CARDPUTER_WIFI_SSID="..." CARDPUTER_WIFI_PASS="..." \
+  CARDPUTER_BRIDGE_TLS_CA=/private/path/bridge-ca.pem \
   ./apps/claude-buddy/scripts/write_bridge_config_folder.sh
 
 # Preferred bridge config provisioning and debug evidence capture
@@ -52,8 +53,9 @@ For repeatable debugging, use [`docs/debugging.md`](docs/debugging.md). The
 recommended flow is: verify the Launcher-installed firmware over USB serial, provision
 bridge config with `scripts/write_bridge_config_serial.sh`, then test BLE and
 folder push separately. `scripts/collect_debug_bundle.sh` creates a redacted
-bundle under `release/debug/` with device status, bridge health, firmware
-archive state, and Claude Desktop buddy log excerpts.
+bundle under `release/debug/` with device status, sanitized bridge health, and
+firmware archive state. Claude content stays out unless explicitly opted in for
+a private reviewed bundle.
 
 Before changing hardware-sensitive code, check
 [`docs/reference/cardputer_adv_wifi.md`](docs/reference/cardputer_adv_wifi.md).
@@ -70,7 +72,7 @@ The device connects to the Claude desktop apps over BLE (developer mode required
 
 - **Permission prompts** — when Claude asks to run a command, the device plays a Mario 1-UP jingle, pulses the RGB LED red-orange, and shows the tool name. Press `Y` to approve, `N` to deny. Approving in under 5 seconds triggers a heart animation.
 - **Claude Session page** — the home screen shows the last three wrapped lines; PET page 3/3 is a BLE-only Claude Session view with session counts, completed assistant-response summaries, and a bottom prompt/input field. If Claude emits `<device_summary>...</device_summary>`, the firmware shows that tiny summary; otherwise it shows a bounded excerpt from official `evt:"turn"` messages and falls back to heartbeat activity when no turn event arrives.
-- **Optional Wi-Fi bridge ping** — after bridge config is provisioned over USB serial or sent as a `bridge-config` folder, the firmware stores Wi-Fi and bridge settings in NVS, reconnects after reboot, and sends bounded state pings over WebSocket when the `wifi` setting is enabled. This is opt-in and does not affect the official BLE path.
+- **Optional secure Wi-Fi bridge ping** — after complete TLS bridge config is provisioned over USB serial or sent as a `bridge-config` folder, firmware stores Wi-Fi and bridge settings in NVS, reconnects after reboot, and sends bounded state pings over CA-validated WSS when `wifi` is enabled. This is opt-in and does not affect official BLE path.
 - **Seven pet moods** — sleep, idle, busy (3+ sessions running), attention (approval pending), celebrate (session just completed), dizzy (you shook it), heart (fast approval).
 - **20 ASCII species + custom GIFs** — cycle with the live picker (Menu → pet) or drag a character pack folder onto the Hardware Buddy window to stream a custom GIF character over BLE.
 - **Tamagotchi mechanics** — the pet has mood, fed, energy, and level stats that drift based on your approval cadence and Claude's token usage. Flip the device face-down and it naps (screen dims, energy refills). Shake it to make it dizzy.
@@ -157,7 +159,7 @@ Unchanged from upstream — drag a character pack folder onto the drop target in
 - Some info-page copy still reads long for landscape; the CLAUDE / DEVICE / BLUETOOTH pages fit but CREDITS is tight.
 - Official Hardware Buddy BLE currently exposes heartbeat snapshots, assistant turn events, file transfer, and permission approve/deny. It does not expose prompt sending or session switching. The firmware can emit an experimental `{"cmd":"prompt"}` message, but stock Claude Desktop will ignore it until a supported desktop handler exists; the device keeps the prompt draft and reports that state. The compact-summary template for that future path is documented in [`docs/DEVICE_SUMMARY_PROMPT.md`](docs/DEVICE_SUMMARY_PROMPT.md).
 - `AskUserQuestion` prompts are shown as Desktop questions. `Y` only allows Claude to use the question tool; it does not select an option or send an answer back to Claude. Answer those in Claude Desktop until a supported question-answer transport exists.
-- The optional Wi-Fi bridge is disabled unless you provision bridge config over USB serial or send a generated `bridge-config` folder to the device and enable Menu → settings → wifi. The bridge defaults to `127.0.0.1`; for a physical Cardputer, run it with `CARDPUTER_BRIDGE_BIND_HOST=0.0.0.0`. The device stores the last provisioned Wi-Fi SSID/password, bridge host, port, and token in NVS until a new config is sent or factory reset clears it. The preferred debugging path is USB serial provisioning because it gives deterministic JSON acks.
+- Optional Wi-Fi bridge is disabled unless a complete secure `bridge-config` is provisioned over USB serial or folder push, then enabled through Menu → settings → wifi. Physical Wi-Fi requires desktop TLS certificate, private key, and public CA paths plus `CARDPUTER_BRIDGE_DEVICE_BIND_HOST=0.0.0.0`; device accepts only CA-validated `wss://.../device` and bearer header authentication. It stores Wi-Fi password, endpoint, pairing token, and public CA in NVS until replacement/factory reset. Source-only validation cannot prove encrypted-at-rest device state; provision secure boot plus flash/NVS encryption for physical extraction resistance. USB serial provisioning remains preferred deterministic config path.
 
 ## Credits
 

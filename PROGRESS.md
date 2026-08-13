@@ -19,15 +19,24 @@
   formatting, and host character tools hardened with focused regression coverage.
 - RFID2 serial card writes, arm timeout, persisted input bounds, and Launcher
   staging hardened with focused regression coverage.
+- Codex Security standard scan `804e44c6-b026-4ffe-bc91-3a04c568e42d` sealed
+  bridge transport/auth, hook input bounds, character/archive availability,
+  debug-content, and RFID serial confirmation findings. Source remediation
+  requires CA-validated WSS, atomic bridge config replacement, local protected
+  hook credential, transactional character staging, bounded ZIP extraction,
+  exact confirmation, and matching physical UI arm for serial write/clone.
 
 ## Latest verification
 
-- RFID2 Launcher-OTA security build: 612,529 bytes.
-- Claude Buddy Launcher-OTA security build: 1,815,909 bytes.
+- RFID2 Launcher-OTA security build: 609,449 bytes.
+- Claude Buddy Launcher-OTA security build: 1,816,521 bytes.
 - Both fit Launcher `ota_0` limit: 5,177,344 bytes.
 - Root tool checks and focused RFID2 and Claude Buddy host security tests passed.
 - Historical v1.3.0 source build passed; its clean-build hash differs from the
   observed binary as accepted floating-dependency drift.
+- Security regressions cover unauthenticated/oversized hook rejection,
+  sanitized health, weak token rejection, secure pairing, bridge transfer
+  rejection, character rollback, ZIP limits, and RFID arm parsing.
 
 ## Pending hardware proof
 
@@ -35,3 +44,13 @@
 - Install Claude Buddy v1.4.0 through Launcher on physical Cardputer ADV.
 - RFID2: boot/version/status, RFID2 I2C detection, read-only card scan.
 - Claude Buddy: boot, USB serial, BLE advertising/pairing, permission prompt.
+
+## External security residuals
+
+- Source validation cannot prove deployed ESP32 secure boot, flash encryption,
+  or NVS encryption. Enabling them is a separate irreversible provisioning
+  decision; no eFuse changes occur here.
+- RFID2 microSD dump/key contents and host physical USB are owner-operated lab
+  data. This release documents but does not claim encrypted removable storage.
+- Physical Wi-Fi bridge needs operator-provided TLS certificate/private key/
+  public CA and device smoke proof. Private key must remain outside repository.

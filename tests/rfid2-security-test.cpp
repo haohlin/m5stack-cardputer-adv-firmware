@@ -13,6 +13,8 @@ int main() {
   assert(rfidConfirmedCommandLength("write-block 4 00 confirmation") == 0);
   assert(rfidConfirmedCommandLength("write-block 4 00 xconfirm") == 0);
   assert(rfidConfirmedCommandLength("write-block 4 00 confirm  ") == strlen("write-block 4 00"));
+  assert(rfidConfirmedCommandLength("write 1 confirmation") == 0);
+  assert(rfidConfirmedCommandLength("write 1 xconfirm") == 0);
 
   const uint32_t started = 1000;
   const uint32_t deadline = rfidWriteArmDeadline(started);
@@ -23,6 +25,9 @@ int main() {
   const uint32_t wrappedDeadline = rfidWriteArmDeadline(wrappedStart);
   assert(rfidArmStillValid(wrappedStart + 1, wrappedDeadline));
   assert(!rfidArmStillValid(wrappedDeadline, wrappedDeadline));
+  assert(rfidSerialDestructiveArmValid(started + 7999, deadline, true, true));
+  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, false, true));
+  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, true, false));
 
   assert(rfidPersistFileAllowed(4096, RFID_MAX_SLOT_FILE_BYTES));
   assert(!rfidPersistFileAllowed(RFID_MAX_SLOT_FILE_BYTES + 1, RFID_MAX_SLOT_FILE_BYTES));

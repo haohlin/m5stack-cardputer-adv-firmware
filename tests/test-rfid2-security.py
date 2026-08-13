@@ -15,6 +15,10 @@ class Rfid2SecurityTests(unittest.TestCase):
     def test_firmware_integrates_security_guards(self):
         source = (RFID2 / "src" / "main.cpp").read_text()
         self.assertIn("rfidConfirmedCommandLength(command.c_str())", source)
+        self.assertIn("rfidConfirmedCommandLength(tail.c_str())", source)
+        self.assertIn("serialDestructiveArmMatches(PendingAction::WriteSlot", source)
+        self.assertIn("serialDestructiveArmMatches(PendingAction::CloneSlot", source)
+        self.assertIn("write-block is serial-disabled", source)
         self.assertIn("rfidWriteArmDeadline(millis())", source)
         self.assertGreaterEqual(source.count("rfidPersistFileAllowed("), 3)
         self.assertGreaterEqual(source.count("rfidPersistLineAllowed("), 3)

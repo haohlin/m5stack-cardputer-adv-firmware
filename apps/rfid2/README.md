@@ -3,6 +3,19 @@
 Part of [M5Stack Cardputer ADV Firmware](../../README.md). This app keeps its
 own source, dependencies, release version, and RFID2-focused history.
 
+## Security boundary
+
+RFID2 is owner-operated MIFARE Classic lab firmware. Treat device USB and
+microSD dump/key files as sensitive physical lab data. This source release does
+not encrypt removable storage. Confidential deployments need approved encrypted
+storage and key-management design before placing cards, dumps, or keys on
+untrusted removable media.
+
+Serial `write` and `clone` require exact `confirm` plus matching physical UI
+arm, target slot, and present card within eight seconds. `write-block` is
+serial-disabled because arbitrary literal payload cannot be bound to existing UI
+arm; use physical full-slot write workflow instead.
+
 Standalone firmware for using the M5Stack Unit RFID2 on the Cardputer-Adv Grove
 port with owned MIFARE Classic 1K lab cards.
 

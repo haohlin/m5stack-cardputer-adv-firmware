@@ -75,6 +75,12 @@ done < <(
   rg --files docs apps/claude-buddy -g '*.md' |
     rg -v '(^|/)(docs/history|docs/superpowers|scripts/recovery)/'
 )
+for required_doc in apps/claude-buddy/README.md apps/claude-buddy/docs/BUILDING.md; do
+  if [[ ! " ${normal_docs[*]} " == *" $required_doc "* ]]; then
+    echo "Normal Buddy documentation guard missed required file: $required_doc" >&2
+    exit 1
+  fi
+done
 if direct_guidance="$(rg -n -i '(\./scripts/(flash|erase)[^ ]*|flash_cardputer_adv|erase_cardputer_adv|pio run .* -t (upload|erase)|esptool .* (write_flash|erase_flash)|M5Burner|write_flash 0x0|erase_flash|download mode|normal merged firmware image|generated merged binary)' "${normal_docs[@]}")"; then
   echo "Direct-flash guidance found in normal Buddy documentation:" >&2
   printf '%s\n' "$direct_guidance" >&2

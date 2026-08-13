@@ -144,12 +144,18 @@ if command -v curl >/dev/null 2>&1; then
 fi
 
 claude_log="$HOME/Library/Logs/Claude/main.log"
-if [[ -f "$claude_log" ]]; then
+if [[ "${CARDPUTER_DEBUG_INCLUDE_CONTENT:-0}" == "1" && -f "$claude_log" ]]; then
   {
     printf 'Recent Claude Desktop buddy-related log lines from %s\n\n' "$claude_log"
     rg -n "buddy|buddy-ble|char_end|bridge-config|Hardware Buddy" "$claude_log" |
       tail -n 200
   } >"$OUT/claude-buddy-log.txt" 2>&1 || true
+else
+  cat >"$OUT/claude-buddy-log.txt" <<'EOF'
+Skipped. Claude summary and log content are excluded by default.
+Set CARDPUTER_DEBUG_INCLUDE_CONTENT=1 only for a private, reviewed bundle.
+That opt-in does not redact Claude content.
+EOF
 fi
 
 cat >"$OUT/README.md" <<EOF
@@ -168,9 +174,11 @@ Files:
   to query device \`{"cmd":"status"}\` over USB CDC
 - \`bridge-config-*.redacted.json\`: redacted bridge config
 - \`bridge-health\`: local bridge health endpoint, if running
-- \`claude-buddy-log.txt\`: filtered Claude Desktop buddy log lines
+- \`claude-buddy-log.txt\`: content-free skip marker by default; set
+  \`CARDPUTER_DEBUG_INCLUDE_CONTENT=1\` only for a private reviewed bundle
 
-Secrets are redacted from JSON files by key name. Review before sharing.
+Secrets are redacted from JSON files by key name. Claude content is excluded by
+default; opt-in log capture is not redacted. Review before sharing.
 EOF
 
 ansi_ok "Debug bundle written: $OUT"

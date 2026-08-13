@@ -10,6 +10,9 @@ struct BridgeStoredConfig {
   char host[64];
   uint16_t port;
   char token[97];
+  // Public trust anchor for the desktop bridge TLS certificate. This is not a
+  // private key, but must travel with endpoint/token as one replacement unit.
+  char ca[2048];
 };
 
 void bridgeConfigLoad();

@@ -13,7 +13,9 @@ Hooks relay to the local bridge:
 http://127.0.0.1:17877/hook
 ```
 
-Set `CARDPUTER_BRIDGE_URL` if the bridge runs somewhere else.
+`CARDPUTER_BRIDGE_URL` may select a different loopback address or port only.
+The hook service is intentionally not a LAN endpoint, so remote URLs are
+rejected.
 
 ## Test Locally
 

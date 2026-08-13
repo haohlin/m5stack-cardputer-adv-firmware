@@ -40,13 +40,19 @@ For physical device bridge testing:
 
 ```bash
 cd desktop-bridge
-CARDPUTER_BRIDGE_BIND_HOST=0.0.0.0 npm run start
+CARDPUTER_BRIDGE_DEVICE_BIND_HOST=0.0.0.0 \\
+CARDPUTER_BRIDGE_TLS_CERT=/private/path/bridge-cert.pem \\
+CARDPUTER_BRIDGE_TLS_KEY=/private/path/bridge-key.pem \\
+CARDPUTER_BRIDGE_TLS_CA=/private/path/bridge-ca.pem \\
+npm run start
 ```
 
 In another terminal, generate the local config folder:
 
 ```bash
-CARDPUTER_WIFI_SSID="..." CARDPUTER_WIFI_PASS="..." ./scripts/write_bridge_config_folder.sh
+CARDPUTER_WIFI_SSID="..." CARDPUTER_WIFI_PASS="..." \\
+CARDPUTER_BRIDGE_TLS_CA=/private/path/bridge-ca.pem \\
+./scripts/write_bridge_config_folder.sh
 ```
 
 For debugging and release validation, prefer USB serial provisioning because it
@@ -72,8 +78,10 @@ The plugin source lives in `claude-plugin/`. It can be tested with:
 claude --plugin-dir ./claude-plugin
 ```
 
-When installed, hooks call the local bridge at
-`http://127.0.0.1:17877` unless `CARDPUTER_BRIDGE_URL` is set.
+When installed, hooks call the local loopback bridge at
+`http://127.0.0.1:17877`. `CARDPUTER_BRIDGE_URL` may select a different
+loopback address or port only; remote hook URLs are rejected so the hook
+credential cannot leave the Mac.
 
 Package desktop bridge and Claude plugin separately from firmware. Firmware
 release remains root `./cardputer release claude-buddy`; do not bundle a merged
