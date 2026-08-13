@@ -17,7 +17,9 @@ Repeat with `claude-buddy`. `release` produces raw ESP application image and
 JSON provenance manifest under `dist/<app>/`. `stage` rebuilds, verifies ESP
 image header, enforces Launcher OTA size, copies only raw image to mounted
 Launcher SD `tools/`, verifies SHA-256, and removes only older binaries with
-same app prefix.
+same app prefix. Staging rejects symlinked root, `tools`, target, or temporary
+entries; copy, checksum, atomic replace, and cleanup remain anchored to
+validated `tools/` directory descriptor.
 
 Device steps: boot Launcher (hold any key while installed app boots to return),
 open **Settings → USB MSC**, run `stage`, exit USB MSC, then select new file in

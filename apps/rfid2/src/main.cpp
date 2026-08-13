@@ -134,6 +134,7 @@ UiMode armedMode = UiMode::Read;
 uint8_t armedSlot = 0;
 uint32_t armedUntilMs = 0;
 String armedCardUid;
+RfidArmOrigin armOrigin = RfidArmOrigin::None;
 bool writeDone = false;
 
 // Auto-trigger guard: tracks the UID of the last card that triggered an
@@ -270,6 +271,7 @@ void cancelArm() {
   pendingAction = PendingAction::None;
   armedUntilMs = 0;
   armedCardUid = "";
+  armOrigin = RfidArmOrigin::None;
 }
 
 void resetAutoTrigger() {
@@ -725,8 +727,9 @@ void advanceSelection() {
   drawHome();
 }
 
-void armSelection(PendingAction action) {
+void armSelection(PendingAction action, RfidArmOrigin origin) {
   pendingAction = action;
+  armOrigin = origin;
   armedMode = selectedMode;
   armedSlot = selectedSlot;
   armedUntilMs = rfidWriteArmDeadline(millis());
@@ -1990,7 +1993,8 @@ int parseOptionalSlot(String tail, bool& confirmed) {
 bool serialDestructiveSelectionMatches(PendingAction action, UiMode mode, uint8_t slot) {
   const bool selectionMatches = selectedMode == mode && selectedSlot == slot &&
                                 armedMode == mode && armedSlot == slot &&
-                                pendingAction == action;
+                                pendingAction == action &&
+                                armOrigin == RfidArmOrigin::PhysicalKeyboard;
   return selectionMatches && rfidArmStillValid(millis(), armedUntilMs) && armedCardUid.length();
 }
 
@@ -2010,7 +2014,7 @@ bool serialDestructiveCardReady(PendingAction action, UiMode mode, uint8_t slot,
   if (!selectPresentCard(operation)) return false;
 
   const String currentUid = uidToString();
-  if (!rfidSerialDestructiveArmValid(millis(), armedUntilMs, true, true,
+  if (!rfidSerialDestructiveArmValid(millis(), armedUntilMs, armOrigin, true, true,
                                      armedCardUid.c_str(), currentUid.c_str())) {
     emitMessage("error", String(operation) + " blocked: card changed after physical UI arm; cancel and re-arm with intended card");
     drawLines((String(operation) + " blocked").c_str(), "Card changed", "Cancel and re-arm", "on physical UI");
@@ -2027,7 +2031,7 @@ void executeSelectedAction() {
       // Reading into a slot that already holds data needs an explicit choice:
       // Enter again to overwrite, or Esc/backtick to keep the existing dump.
       if (storedDumps[selectedSlot].valid && !isArmedAction(PendingAction::ReadOverwrite)) {
-        armSelection(PendingAction::ReadOverwrite);
+        armSelection(PendingAction::ReadOverwrite, RfidArmOrigin::PhysicalKeyboard);
         emitMessage("armed", "slot has data; Enter=overwrite, Esc=keep for " + slotTitle(selectedSlot));
         drawArmedScreen();
         return;
@@ -2043,7 +2047,7 @@ void executeSelectedAction() {
         return;
       }
       if (!isArmedAction(PendingAction::WriteSlot)) {
-        armSelection(PendingAction::WriteSlot);
+        armSelection(PendingAction::WriteSlot, RfidArmOrigin::PhysicalKeyboard);
         emitMessage("armed", "write armed for " + slotSummary(selectedSlot) + "; press Enter again within 8s");
         drawArmedScreen();
         return;
@@ -2059,7 +2063,7 @@ void executeSelectedAction() {
         return;
       }
       if (!isArmedAction(PendingAction::CloneSlot)) {
-        armSelection(PendingAction::CloneSlot);
+        armSelection(PendingAction::CloneSlot, RfidArmOrigin::PhysicalKeyboard);
         emitMessage("armed", "CLONE armed for " + slotSummary(selectedSlot) + " (rewrites UID+block0); Enter again within 8s");
         drawArmedScreen();
         return;
@@ -2116,7 +2120,7 @@ void clearSelectedSlotAction() {
   }
 
   if (!isArmedAction(PendingAction::ClearSlot)) {
-    armSelection(PendingAction::ClearSlot);
+    armSelection(PendingAction::ClearSlot, RfidArmOrigin::PhysicalKeyboard);
     emitMessage("armed", "clear armed for " + slotSummary(selectedSlot) + "; press Backspace again within 8s");
     drawLines("Clear armed", slotSummary(selectedSlot), "Back again", "backtick cancels");
     return;
@@ -2275,7 +2279,7 @@ void pollCardPreview() {
     if (selectedMode == UiMode::Read) {
       if (storedDumps[selectedSlot].valid) {
         // Slot occupied → arm overwrite prompt; user confirms with Enter or cancels.
-        armSelection(PendingAction::ReadOverwrite);
+        armSelection(PendingAction::ReadOverwrite, RfidArmOrigin::AutoCard);
         emitMessage("auto", "card detected; slot occupied — Enter=overwrite, Esc=keep");
         drawArmedScreen();
         // Card left selected; arm window ticks down; user presses Enter to read.
@@ -2293,7 +2297,7 @@ void pollCardPreview() {
     }
 
     if (selectedMode == UiMode::Write && storedDumps[selectedSlot].valid) {
-      armSelection(PendingAction::WriteSlot);
+      armSelection(PendingAction::WriteSlot, RfidArmOrigin::AutoCard);
       emitMessage("auto", "card detected; write armed for " + slotSummary(selectedSlot) + " — Enter to confirm");
       drawArmedScreen();
       rfid.PICC_HaltA();
@@ -2302,7 +2306,7 @@ void pollCardPreview() {
     }
 
     if (selectedMode == UiMode::Clone && storedDumps[selectedSlot].valid) {
-      armSelection(PendingAction::CloneSlot);
+      armSelection(PendingAction::CloneSlot, RfidArmOrigin::AutoCard);
       emitMessage("auto", "card detected; clone armed for " + slotSummary(selectedSlot) + " — Enter to confirm");
       drawArmedScreen();
       rfid.PICC_HaltA();
@@ -2440,14 +2444,26 @@ void processCommand(String command) {
       saveKeysToSd();
       emitMessage("keys", "added " + hex + "; count=" + String(mifareKeys.size()));
     }
-  } else if (command == "key clear") {
-    mifareKeys.clear();
-    saveKeysToSd();
-    emitMessage("keys", "dictionary cleared");
-  } else if (command == "key reset") {
-    seedDefaultKeyDictionary();
-    saveKeysToSd();
-    emitMessage("keys", "dictionary reset to defaults; count=" + String(mifareKeys.size()));
+  } else if (command == "key clear" || command.startsWith("key clear ")) {
+    String tail = commandTail(command, "key clear");
+    const bool confirmed = consumeConfirm(tail);
+    if (!confirmed || tail.length()) {
+      emitMessage("error", "key clear requires exact trailing confirm: key clear confirm");
+    } else {
+      mifareKeys.clear();
+      saveKeysToSd();
+      emitMessage("keys", "dictionary cleared");
+    }
+  } else if (command == "key reset" || command.startsWith("key reset ")) {
+    String tail = commandTail(command, "key reset");
+    const bool confirmed = consumeConfirm(tail);
+    if (!confirmed || tail.length()) {
+      emitMessage("error", "key reset requires exact trailing confirm: key reset confirm");
+    } else {
+      seedDefaultKeyDictionary();
+      saveKeysToSd();
+      emitMessage("keys", "dictionary reset to defaults; count=" + String(mifareKeys.size()));
+    }
   } else if (command == "trailers on") {
     cloneWriteTrailers = true;
     emitMessage("trailers", "clone will WRITE sector trailers (risky)");
@@ -2461,17 +2477,20 @@ void processCommand(String command) {
   } else if (command == "clear" || command.startsWith("clear ")) {
     String tail = commandTail(command, "clear");
     const bool confirmed = consumeConfirm(tail);
-    if (tail == "all") {
-      if (confirmed) {
-        clearAllSlots();
-      } else {
+    if (!confirmed) {
+      if (tail == "all") {
         emitMessage("error", "clear all requires confirm: clear all confirm");
         drawLines("Clear blocked", "Use confirm for all", "clear all confirm");
+      } else {
+        emitMessage("error", "clear slot requires exact trailing confirm: clear <slot> confirm");
+        drawLines("Clear blocked", "Serial needs confirm", "clear <slot> confirm");
       }
+    } else if (tail == "all") {
+      clearAllSlots();
     } else {
       const int parsedSlot = tail.length() ? parseSlotNumber(tail) : selectedSlot;
       if (parsedSlot < 0) {
-        emitMessage("error", "usage: clear [slot 1-" + String(kDumpSlotCount) + "] or clear all confirm");
+        emitMessage("error", "usage: clear [slot 1-" + String(kDumpSlotCount) + "] confirm or clear all confirm");
       } else {
         clearSlot((uint8_t)parsedSlot);
       }
@@ -2483,7 +2502,7 @@ void processCommand(String command) {
   } else if (command == "version") {
     emitMessage("version", String(kFwName) + " " + runningVersion());
   } else if (command == "help") {
-    emitMessage("help", "commands: status, slots, next, ui, mode read|write|clone, slot <1-4>, scan, store [slot] [confirm], dump [slot], write [slot] confirm, clone [slot] confirm, write-block <block> <32hex> confirm, keys, key add <12hex>, key clear, key reset, trailers on|off, sd, clear [slot]|all confirm, reset-rfid, version, help");
+    emitMessage("help", "commands: status, slots, next, ui, mode read|write|clone, slot <1-4>, scan, store [slot] [confirm], dump [slot], write [slot] confirm, clone [slot] confirm, write-block <block> <32hex> confirm, keys, key add <12hex>, key clear confirm, key reset confirm, trailers on|off, sd, clear [slot] confirm|clear all confirm, reset-rfid, version, help");
   } else {
     emitMessage("error", "unknown command: " + command);
   }

@@ -1,11 +1,28 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import test from "node:test";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { CardputerBridge, loadConfig } from "../dist/index.js";
-import { localBridgeUrl, storedHookToken } from "../../claude-plugin/hooks/relay.mjs";
+import {
+  CardputerBridge,
+  bridgeHookSocketPath,
+  configureDeviceServerAdmission,
+  loadConfig,
+  parseDeviceUpgradeTarget,
+  registerTools
+} from "../dist/index.js";
+import {
+  hookSocketPath,
+  readHookInput,
+  serializeHookRequest,
+  storedHookToken,
+  validateHookOutput
+} from "../../claude-plugin/hooks/relay.mjs";
 
 const strong = "Az09_-bcDE12fgHI34jkLM56noPQ78rs";
 const provenance = "bridge-csprng-v1";
@@ -27,6 +44,19 @@ async function unusedLoopbackPort() {
       const address = server.address();
       server.close(() => resolve(address.port));
     });
+  });
+}
+
+function unixRequest(socketPath, path, options = {}) {
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath, path, method: options.method || "GET", headers: options.headers || {} }, res => {
+      const chunks = [];
+      res.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      res.on("end", () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.on("error", reject);
+    if (options.body) req.write(options.body);
+    req.end();
   });
 }
 
@@ -76,13 +106,12 @@ test("rotates pre-marker credentials once and then preserves generated credentia
   assert.equal(reloaded.hookToken, rotated.hookToken);
 });
 
-test("persists generated credentials 0600 and keeps hook traffic loopback", () => {
+test("persists generated credentials in owner-only config directory", () => {
   const config = tempConfig();
   loadConfig({ CARDPUTER_BRIDGE_CONFIG: config });
-  assert.equal(statSync(config).mode & 0o777, 0o600);
-  assert.equal(localBridgeUrl("http://127.0.0.1:17877"), "http://127.0.0.1:17877");
-  assert.equal(localBridgeUrl("https://127.0.0.1:17877"), null);
-  assert.equal(localBridgeUrl("http://bridge.example:17877"), null);
+  assert.equal(lstatSync(config).mode & 0o777, 0o600);
+  assert.equal(lstatSync(join(config, "..")).mode & 0o777, 0o700);
+  assert.equal(bridgeHookSocketPath(config), hookSocketPath(config));
 });
 
 test("relay reads hook credential only from marked protected bridge config", () => {
@@ -100,10 +129,9 @@ test("relay reads hook credential only from marked protected bridge config", () 
   assert.equal(storedHookToken(exposed), null);
 });
 
-test("hook requires credential, bounds body, and health omits content", async () => {
-  const hookPort = await unusedLoopbackPort();
+test("hook uses owner-protected Unix socket, requires credential, and bounds body", async () => {
   const config = {
-    hookPort,
+    hookPort: 17877,
     devicePort: await unusedLoopbackPort(),
     deviceHost: "127.0.0.1",
     token: strong,
@@ -113,15 +141,22 @@ test("hook requires credential, bounds body, and health omits content", async ()
   const bridge = new CardputerBridge(config);
   await bridge.start();
   try {
+    const socketPath = hookSocketPath(config.configPath);
+    assert(lstatSync(socketPath).isSocket());
+    assert.equal(lstatSync(socketPath).mode & 0o777, 0o600);
     bridge.notify("Claude", "secret summary must not be in health");
-    const base = `http://127.0.0.1:${hookPort}`;
-    const health = await fetch(`${base}/health`);
+    const health = await unixRequest(socketPath, "/health");
     assert.equal(health.status, 200);
-    const healthBody = await health.text();
+    const healthBody = health.body;
     assert(!healthBody.includes("secret summary"));
     assert(!healthBody.includes("lastSummary"));
-    assert.equal((await fetch(`${base}/hook`, { method: "POST", body: "{}" })).status, 401);
-    assert.equal((await fetch(`${base}/hook`, {
+    assert.equal((await unixRequest(socketPath, "/hook", { method: "POST", body: "{}" })).status, 401);
+    assert.equal((await unixRequest(socketPath, "/hook", {
+      method: "POST",
+      headers: { authorization: `Bearer ${config.hookToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ eventName: "Notification", event: { message: "expected" } })
+    })).status, 200);
+    assert.equal((await unixRequest(socketPath, "/hook", {
       method: "POST",
       headers: { authorization: `Bearer ${config.hookToken}`, "content-type": "application/json" },
       body: "x".repeat(32 * 1024 + 1)
@@ -129,9 +164,26 @@ test("hook requires credential, bounds body, and health omits content", async ()
   } finally {
     await bridge.stop();
   }
+  assert.equal(existsSync(hookSocketPath(config.configPath)), false);
 });
 
-test("hook listener configures bounded admission before listening", () => {
+test("hook refuses to replace a non-socket object at controlled path", async () => {
+  const configPath = tempConfig();
+  const socketPath = hookSocketPath(configPath);
+  writeFileSync(socketPath, "keep", { mode: 0o600 });
+  const bridge = new CardputerBridge({
+    hookPort: 17877,
+    devicePort: 17878,
+    deviceHost: "127.0.0.1",
+    token: strong,
+    hookToken: strong.split("").reverse().join(""),
+    configPath
+  });
+  await assert.rejects(() => bridge.start(), /not a socket/);
+  assert.equal(readFileSync(socketPath, "utf8"), "keep");
+});
+
+test("hook listener configures bounded admission before Unix socket listen", () => {
   const bridge = new CardputerBridge({
     hookPort: 17877,
     devicePort: 17878,
@@ -146,6 +198,76 @@ test("hook listener configures bounded admission before listening", () => {
   assert.equal(hookServer.keepAliveTimeout, 5_000);
   assert.equal(hookServer.maxConnections, 32);
   assert.equal(hookServer.maxRequestsPerSocket, 16);
+});
+
+test("MCP registration never exposes pairing bearer material", () => {
+  const bridge = new CardputerBridge({ hookPort: 17877, devicePort: 17878, deviceHost: "127.0.0.1", token: strong, hookToken: strong, configPath: tempConfig() });
+  const server = new McpServer({ name: "security-test", version: "1" });
+  registerTools(server, bridge);
+  const names = Object.keys(server._registeredTools);
+  assert(names.includes("notify_cardputer"));
+  assert(names.includes("device_status"));
+  assert(!names.includes("generate_pairing_config"));
+});
+
+test("upgrade target parser ignores Host and rejects non-origin-form targets", () => {
+  assert.equal(parseDeviceUpgradeTarget("/device")?.pathname, "/device");
+  assert.equal(parseDeviceUpgradeTarget("//attacker.example/device"), null);
+  assert.equal(parseDeviceUpgradeTarget("https://attacker.example/device"), null);
+  assert.equal(parseDeviceUpgradeTarget("not-a-path"), null);
+});
+
+test("device listener and WebSocket admission are finite before authentication", () => {
+  const bridge = new CardputerBridge({ hookPort: 17877, devicePort: 17878, deviceHost: "127.0.0.1", token: strong, hookToken: strong, configPath: tempConfig() });
+  const server = configureDeviceServerAdmission({
+    requestTimeout: 0,
+    headersTimeout: 0,
+    keepAliveTimeout: 0,
+    maxConnections: 0,
+    maxRequestsPerSocket: 0,
+    setTimeout(milliseconds) { this.timeout = milliseconds; }
+  });
+  assert.equal(server.requestTimeout, 15_000);
+  assert.equal(server.headersTimeout, 10_000);
+  assert.equal(server.keepAliveTimeout, 5_000);
+  assert.equal(server.maxConnections, 32);
+  assert.equal(server.maxRequestsPerSocket, 16);
+  assert.equal(server.timeout, 15_000);
+  assert.equal(bridge.wsServer.options.maxPayload, 4096);
+});
+
+test("device frames reject binary or oversized input and retain only whitelisted bounded state", () => {
+  class FakeSocket extends EventEmitter {
+    OPEN = 1;
+    readyState = 1;
+    sent = [];
+    closed = [];
+    send(payload) { this.sent.push(payload); }
+    close(code, reason) { this.closed.push([code, reason]); }
+  }
+  const bridge = new CardputerBridge({ hookPort: 17877, devicePort: 17878, deviceHost: "127.0.0.1", token: strong, hookToken: strong, configPath: tempConfig() });
+  const socket = new FakeSocket();
+  bridge.attachDevice(socket);
+  socket.emit("message", Buffer.from(JSON.stringify({ v: 1, type: "hello", device: "D".repeat(200), fw: "1.4.0", token: "must-not-survive" })), false);
+  socket.emit("message", Buffer.from(JSON.stringify({ v: 1, type: "state", battery: 200, ble: true, page: "home", heap: 1234, secret: "must-not-survive" })), false);
+  const status = bridge.status();
+  assert.deepEqual(status.deviceInfo, { device: "D".repeat(48), fw: "1.4.0" });
+  assert.deepEqual(status.deviceState, { battery: 100, ble: true, page: "home", heap: 1234 });
+  assert(!JSON.stringify(status).includes("must-not-survive"));
+  socket.emit("message", Buffer.from("{}"), true);
+  assert.equal(socket.closed.at(-1)[0], 1003);
+  socket.emit("message", Buffer.alloc(4097), false);
+  assert.equal(socket.closed.at(-1)[0], 1009);
+});
+
+test("relay bounds stdin, outbound body, and accepted stdout JSON", async () => {
+  assert.equal(await readHookInput(Readable.from(["{" + "x".repeat(32 * 1024) + "}"])), null);
+  assert.deepEqual(await readHookInput(Readable.from(['{"ok":true}'])), { ok: true });
+  assert.equal(serializeHookRequest("Stop", { text: "x".repeat(32 * 1024) }), null);
+  const accepted = validateHookOutput(JSON.stringify({ hookSpecificOutput: { hookEventName: "Elicitation", action: "accept", content: { answer: "yes" } } }));
+  assert.equal(JSON.parse(accepted).hookSpecificOutput.action, "accept");
+  assert.equal(validateHookOutput('{"arbitrary":"output"}'), null);
+  assert.equal(validateHookOutput("x".repeat(32 * 1024 + 1)), null);
 });
 
 test("secure pairing config requires TLS and emits wss with public CA", () => {

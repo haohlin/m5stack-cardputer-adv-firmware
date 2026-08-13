@@ -16,6 +16,7 @@ grep -qx 'APP_PLATFORMIO_ENV="cardputer-adv-launcher-ota"' apps/claude-buddy/app
   cardputer tools/cardputer docs/development.md README.md
 
 source tools/cardputer/common.sh
+type assert_no_local_buddy_header >/dev/null
 load_contract
 [[ "$LAUNCHER_OTA_SIZE" == "0x4F0000" ]]
 load_app rfid2
@@ -27,6 +28,17 @@ load_app claude-buddy
 [[ "$APP_PLATFORMIO_ENV" == "cardputer-adv-launcher-ota" ]]
 [[ "$APP_FIRMWARE_REL" == ".pio/build/cardputer-adv-launcher-ota/firmware.bin" ]]
 [[ "$APP_ARTIFACT_PREFIX" == "Claude-Desktop-Buddy" ]]
+
+guard_root="$(mktemp -d)"
+trap 'rm -rf "$guard_root"' EXIT
+mkdir -p "$guard_root/apps/claude-buddy/src"
+touch "$guard_root/apps/claude-buddy/src/bridge_config.local.h"
+if (CARDPUTER_ROOT="$guard_root"; APP_ID="claude-buddy"; assert_no_local_buddy_header); then
+  echo "Buddy local compatibility header passed release guard" >&2
+  exit 1
+fi
+rm -rf "$guard_root"
+trap - EXIT
 
 buddy_ini="apps/claude-buddy/platformio.ini"
 [[ "$(rg -c '^\[env:' "$buddy_ini")" == "1" ]]
@@ -90,5 +102,93 @@ if ./cardputer --help | rg -qi '(flash|erase|scripts/recovery)'; then
   echo "Root cardputer interface exposes recovery operations" >&2
   exit 1
 fi
+
+python3 - <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+import tempfile
+
+path = Path("tools/cardputer/stage_to_launcher.py")
+spec = importlib.util.spec_from_file_location("stage_to_launcher", path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+def expect_reject(call, label):
+    try:
+        call()
+    except (OSError, ValueError):
+        return
+    raise AssertionError(f"unsafe {label} was accepted")
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    volume = root / "volume"
+    tools = volume / "tools"
+    tools.mkdir(parents=True)
+    firmware = root / "firmware.bin"
+    payload = b"\xe9" + b"launcher-safe" * 64
+    firmware.write_bytes(payload)
+    name = "Claude-Desktop-Buddy-v1.4.0-test.bin"
+    old = tools / "Claude-Desktop-Buddy-v1.3.9-old.bin"
+    old.write_bytes(b"old")
+    unrelated = tools / "Other-App-v1.0.0.bin"
+    unrelated.write_bytes(b"keep")
+    target = module.stage_artifact(firmware, volume, "tools", name, "Claude-Desktop-Buddy")
+    assert target.read_bytes() == payload
+    assert not old.exists()
+    assert unrelated.read_bytes() == b"keep"
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    real_volume = root / "real-volume"
+    (real_volume / "tools").mkdir(parents=True)
+    linked_volume = root / "linked-volume"
+    linked_volume.symlink_to(real_volume, target_is_directory=True)
+    firmware = root / "firmware.bin"
+    firmware.write_bytes(b"\xe9valid")
+    expect_reject(lambda: module.stage_artifact(firmware, linked_volume, "tools", "RFID2-Clone-Station-v1.5.9-test.bin", "RFID2-Clone-Station"), "volume symlink")
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    volume = root / "volume"
+    outside = root / "outside"
+    volume.mkdir()
+    outside.mkdir()
+    (volume / "tools").symlink_to(outside, target_is_directory=True)
+    firmware = root / "firmware.bin"
+    firmware.write_bytes(b"\xe9valid")
+    expect_reject(lambda: module.stage_artifact(firmware, volume, "tools", "RFID2-Clone-Station-v1.5.9-test.bin", "RFID2-Clone-Station"), "tools symlink")
+    assert list(outside.iterdir()) == []
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    volume = root / "volume"
+    tools = volume / "tools"
+    tools.mkdir(parents=True)
+    outside = root / "outside.bin"
+    outside.write_bytes(b"keep")
+    name = "RFID2-Clone-Station-v1.5.9-test.bin"
+    (tools / name).symlink_to(outside)
+    firmware = root / "firmware.bin"
+    firmware.write_bytes(b"\xe9valid")
+    expect_reject(lambda: module.stage_artifact(firmware, volume, "tools", name, "RFID2-Clone-Station"), "target symlink")
+    assert outside.read_bytes() == b"keep"
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    volume = root / "volume"
+    tools = volume / "tools"
+    tools.mkdir(parents=True)
+    outside = root / "outside.partial"
+    outside.write_bytes(b"keep")
+    name = "RFID2-Clone-Station-v1.5.9-test.bin"
+    (tools / f".{name}.fixed.partial").symlink_to(outside)
+    firmware = root / "firmware.bin"
+    firmware.write_bytes(b"\xe9valid")
+    expect_reject(lambda: module.stage_artifact(firmware, volume, "tools", name, "RFID2-Clone-Station", nonce_factory=lambda: "fixed"), "temporary symlink")
+    assert outside.read_bytes() == b"keep"
+PY
 
 echo "cardputer tool static checks passed"

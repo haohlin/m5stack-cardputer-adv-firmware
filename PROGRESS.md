@@ -33,11 +33,18 @@
   generator, rotates unmarked legacy credentials once, rejects caller token
   environment variables and high-signal placeholder patterns, and reports
   bridge forget success only after persistent removal.
+- Post-remediation Codex Security scan
+  `b6a97a3f-2233-4fd6-ba4a-a2cc805cd8ee` found remaining source boundaries.
+  Task 7c closes them with MCP bearer removal, owner-only Unix hook socket,
+  bounded TLS/WebSocket/device state, credential-free Buddy artifacts, recursive
+  debug redaction, all-app contained Launcher staging, semantic character
+  validation/resource limits, RFID physical-key arm origin, and exact local-state
+  serial confirmations.
 
 ## Latest verification
 
-- RFID2 Launcher-OTA review-remediation build: 610,273 bytes.
-- Claude Buddy Launcher-OTA review-remediation build: 1,817,425 bytes.
+- RFID2 Task 7c Launcher-OTA build: 611,552 bytes.
+- Claude Buddy Task 7c Launcher-OTA build: 1,818,544 bytes.
 - Both fit Launcher `ota_0` limit: 5,177,344 bytes.
 - Root tool checks and focused RFID2 and Claude Buddy host security tests passed.
 - Historical v1.3.0 source build passed; its clean-build hash differs from the
@@ -46,6 +53,10 @@
   sanitized health, configured/generated token rules, hook admission limits,
   secure pairing, atomic bridge-record integrity, bridge transfer rejection,
   character rollback, ZIP limits, and RFID arm identity matching.
+- Task 7c executable regressions cover Unix socket ownership/non-socket refusal,
+  MCP tool surface, fixed-base upgrades, bounded device/relay data, nested
+  `hookToken` redaction, root staging symlink attacks, character source/output
+  limits and semantic rollback, RFID arm origin, and exact confirm parsing.
 
 ## Pending hardware proof
 
@@ -63,3 +74,6 @@
   data. This release documents but does not claim encrypted removable storage.
 - Physical Wi-Fi bridge needs operator-provided TLS certificate/private key/
   public CA and device smoke proof. Private key must remain outside repository.
+- Task 7c evidence is source/host/build only. It does not prove physical Launcher
+  install, runtime TLS on device, secure boot, flash encryption, NVS encryption,
+  or eFuse state; no device or irreversible action occurred.

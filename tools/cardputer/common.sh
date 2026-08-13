@@ -29,6 +29,14 @@ load_app() {
   [[ "$APP_ID" == "$requested" ]] || die "app metadata ID mismatch in $APP_CONFIG"
 }
 
+assert_no_local_buddy_header() {
+  [[ "${APP_ID:-}" == "claude-buddy" ]] || return 0
+  local header="$CARDPUTER_ROOT/apps/claude-buddy/src/bridge_config.local.h"
+  if [[ -e "$header" || -L "$header" ]]; then
+    die "remove stale $header; normal Buddy artifacts accept runtime BLE/USB/folder bridge provisioning only"
+  fi
+}
+
 file_size_bytes() {
   if stat -f %z "$1" >/dev/null 2>&1; then
     stat -f %z "$1"
@@ -72,6 +80,7 @@ artifact_basename() {
 build_app() {
   local requested="$1"
   load_app "$requested"
+  assert_no_local_buddy_header
   "$APP_DIR/scripts/build_cardputer_adv.sh"
 }
 
@@ -125,23 +134,12 @@ stage_app() {
   load_contract
   load_app "$requested"
 
-  local packaged sd_root sd_tools target target_sha source_sha old
+  local packaged sd_root target
   packaged="$(package_app "$requested")"
   sd_root="$(find_launcher_sd_root)"
-  sd_tools="$sd_root/$LAUNCHER_SD_TOOLS_DIR"
-  target="$sd_tools/$(basename "$packaged")"
-  source_sha="$(shasum -a 256 "$packaged" | awk '{print $1}')"
-
-  cp "$packaged" "$target.partial"
-  target_sha="$(shasum -a 256 "$target.partial" | awk '{print $1}')"
-  [[ "$source_sha" == "$target_sha" ]] || die "copied artifact checksum mismatch"
-  mv -f "$target.partial" "$target"
-
-  shopt -s nullglob
-  for old in "$sd_tools"/"$APP_ARTIFACT_PREFIX"-v*.bin; do
-    [[ "$old" == "$target" ]] || rm -f "$old"
-  done
-  shopt -u nullglob
+  target="$(python3 "$CARDPUTER_ROOT/tools/cardputer/stage_to_launcher.py" \
+    "$packaged" "$sd_root" "$LAUNCHER_SD_TOOLS_DIR" "$(basename "$packaged")" \
+    "$APP_ARTIFACT_PREFIX")" || die "Launcher staging failed"
 
   echo "Staged $target"
   echo "Next: eject USB MSC, exit Launcher USB MSC, then select tools/$(basename "$target") and Install."

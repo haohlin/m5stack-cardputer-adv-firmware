@@ -5,8 +5,8 @@ Official Hardware Buddy BLE remains primary path.
 
 ## Services
 
-- `http://127.0.0.1:17877/health`: content-free local health only.
-- `http://127.0.0.1:17877/hook`: loopback-only hook endpoint; bearer hook token required.
+- `~/.claude-cardputer-bridge/hook.sock`: owner-only Unix-domain HTTP transport
+  for content-free health and authenticated hooks. No hook TCP port exists.
 - `wss://<lan-host>:17878/device`: optional TLS device listener; bearer pairing token in `Authorization` header.
 
 No `ws://` device endpoint or token-in-URL configuration is accepted.
@@ -43,15 +43,28 @@ The bridge is the sole credential authority. It generates independent pairing
 and hook credentials from 24 CSPRNG bytes, encodes each as exactly 32 URL-safe
 characters, marks their provenance, persists them in
 `~/.claude-cardputer-bridge/config.json` mode `0600`, and never prints them.
+Its containing directory is mode `0700`; `hook.sock` is mode `0600` and has no
+environment override. The hook bearer remains a defense-in-depth check.
 Nonblank `CARDPUTER_PAIRING_TOKEN` or `CARDPUTER_HOOK_TOKEN` values fail startup.
 A pre-marker config rotates both credentials once, so re-provision the device.
 Plugin relay reads the hook credential only from the marked mode-protected file.
 Firmware pattern checks protect untrusted BLE/file parsing but cannot prove
 entropy; physical BLE/USB provisioning must be trusted and use bridge output.
 
-Loopback hook admission uses a 15-second request timeout, 10-second header
+Unix-socket hook admission uses a 15-second request timeout, 10-second header
 timeout, 5-second keep-alive timeout, 32-connection cap, 16 requests per socket,
-and 32 KiB body cap.
+and 32 KiB request/response cap. Relay stdin and serialized output use same cap.
+
+Pairing bearer material is never an MCP tool result. Generate it only through
+protected local file workflow (`npm run pair-config` or repository provisioning
+scripts). Anyone who previously called removed `generate_pairing_config` tool
+must stop bridge, move old local config aside, restart to generate new
+credentials, and re-provision device before use.
+
+Device listener sets finite TLS handshake, idle, request/header/keep-alive,
+connection, requests-per-socket, and 4096-byte WebSocket frame limits before
+authentication. Binary/oversized frames close; `hello` and `state` retain only
+bounded protocol fields.
 
 ## Development
 
@@ -62,3 +75,9 @@ npm test
 
 `--print-config` reports ports, file path, and booleans only; it never prints a
 token, key, certificate body, device state, or Claude summary.
+
+Local health check:
+
+```bash
+curl --unix-socket ~/.claude-cardputer-bridge/hook.sock http://localhost/health
+```

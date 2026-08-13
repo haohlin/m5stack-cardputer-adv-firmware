@@ -44,19 +44,25 @@ bridge configuration. It never loads legacy endpoint/token/CA fields separately.
 A missing, malformed, partial, or failed replacement remains inactive; cleanup
 of legacy keys occurs only after the complete record is committed.
 
-Desktop service separates local HTTP from network device transport:
+Desktop service separates owner-only local Unix HTTP from network device transport:
 
-- `GET http://127.0.0.1:17877/health` is loopback-only and content-free.
-- `POST http://127.0.0.1:17877/hook` is loopback-only, requires independent
-  bearer hook token, rejects bodies over 32 KiB, and uses 15-second request,
+- `GET /health` and `POST /hook` use mode-`0600` `hook.sock` inside mode-`0700`
+  bridge config directory. No TCP listener or socket-path override exists.
+- `/hook` requires independent bearer hook token, rejects request/response over
+  32 KiB, and uses 15-second request,
   10-second header, and 5-second keep-alive timeouts. Admission is capped at 32
   connections and 16 requests per socket.
 - `wss://<host>:17878/device` is separate TLS listener. It requires pairing
-  bearer token and never accepts token query parameters.
+  bearer token and never accepts token query parameters. Fixed-base origin-form
+  upgrade parsing ignores attacker `Host`; TLS handshake/idle and HTTP admission
+  are finite. WebSocket frames are text-only, at most 4096 bytes, and device
+  status retains only bounded whitelisted fields.
 
 The bridge limits pending Cardputer questions to eight and each request timeout
 to at most 300 seconds. The local relay discovers the hook credential only from
-the marked, mode-protected local bridge config and does not log it.
+the marked, mode-protected local bridge config, bounds stdin/body/output, and
+does not log it. Pairing config is local-file CLI output only; MCP tool
+registration never returns bearer.
 
 Provision over USB serial or a `bridge-config` folder only after desktop TLS
 certificate, private key, and public CA have been set. Pairing config contains

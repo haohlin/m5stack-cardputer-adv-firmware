@@ -304,9 +304,10 @@ inline FakeEsp ESP;
 
 inline bool buddyMode = false;
 inline bool gifAvailable = false;
+inline bool fakeCharacterInitResult = true;
 inline void buddySetSpeciesIdx(uint8_t) {}
 inline void characterClose() {}
-inline bool characterInit(const char*) { return true; }
+inline bool characterInit(const char*) { return fakeCharacterInitResult; }
 inline void petNameSet(const char*) {}
 inline const char* petName() { return "pet"; }
 inline void ownerSet(const char*) {}

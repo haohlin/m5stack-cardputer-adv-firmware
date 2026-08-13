@@ -54,13 +54,14 @@ when `CARDPUTER_WIFI_ON_DEVICE=1`.
 ## Local service checks
 
 ```bash
-curl -fsS http://127.0.0.1:17877/health
+curl --unix-socket ~/.claude-cardputer-bridge/hook.sock \
+  -fsS http://localhost/health
 ```
 
-Health intentionally contains only service status and ports. `/hook` requires
-local bearer credential and is not a LAN service. Claude plugin relay reads this
-credential only from the marked, mode-protected local bridge config; do not copy
-it into logs.
+Health intentionally contains only service status. `/hook` requires local
+bearer credential and exists only on owner-protected Unix socket, not TCP/LAN.
+Claude plugin relay reads credential only from marked mode-protected local
+bridge config; do not copy it into logs.
 The listener enforces a 15-second request timeout, 10-second header timeout,
 5-second keep-alive timeout, 32-connection cap, 16 requests per socket, and the
 existing 32 KiB body cap.
@@ -71,8 +72,9 @@ existing 32 KiB body cap.
 ./scripts/collect_debug_bundle.sh
 ```
 
-Bundle redacts JSON secret keys and excludes Claude summaries/log payload by
-default. For private incident analysis only:
+Bundle redacts nested JSON key names case-insensitively when they denote tokens,
+passwords, secrets, keys, authorization, credentials, or bearer material. It
+excludes Claude summaries/log payload by default. For private incident analysis only:
 
 ```bash
 CARDPUTER_DEBUG_INCLUDE_CONTENT=1 ./scripts/collect_debug_bundle.sh

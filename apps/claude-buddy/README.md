@@ -141,7 +141,13 @@ Each species animates across seven states (sleep / idle / busy / attention / cel
 
 ## GIF pets
 
-Unchanged from upstream — drag a character pack folder onto the drop target in the Hardware Buddy window. See the [upstream README](https://github.com/anthropics/claude-desktop-buddy#gif-pets) for the pack format. GIFs are rendered centered in the upper 80 px of the landscape canvas. The 1.8 MB LittleFS budget is the same.
+Drag a valid flat character pack folder onto Hardware Buddy drop target. See
+[upstream README](https://github.com/anthropics/claude-desktop-buddy#gif-pets)
+for format. Host prep and firmware enforce supported nonempty states, regular
+referenced GIFs, signature/dimensions/decoder-open validity, bounded source
+bytes/frames/pixels, and hard 1.8 MB output/transfer limit before commit. Failed
+semantic validation preserves active character. GIFs render centered in upper
+80 px landscape canvas.
 
 ## Layout notes
 
@@ -160,6 +166,9 @@ Unchanged from upstream — drag a character pack folder onto the drop target in
 - Official Hardware Buddy BLE currently exposes heartbeat snapshots, assistant turn events, file transfer, and permission approve/deny. It does not expose prompt sending or session switching. The firmware can emit an experimental `{"cmd":"prompt"}` message, but stock Claude Desktop will ignore it until a supported desktop handler exists; the device keeps the prompt draft and reports that state. The compact-summary template for that future path is documented in [`docs/DEVICE_SUMMARY_PROMPT.md`](docs/DEVICE_SUMMARY_PROMPT.md).
 - `AskUserQuestion` prompts are shown as Desktop questions. `Y` only allows Claude to use the question tool; it does not select an option or send an answer back to Claude. Answer those in Claude Desktop until a supported question-answer transport exists.
 - Optional Wi-Fi bridge is disabled unless a complete secure `bridge-config` is provisioned over USB serial or folder push, then enabled through Menu → settings → wifi. Physical Wi-Fi requires desktop TLS certificate, private key, and public CA paths plus `CARDPUTER_BRIDGE_DEVICE_BIND_HOST=0.0.0.0`; device accepts only CA-validated `wss://.../device` and bearer header authentication. It stores Wi-Fi password, endpoint, pairing token, and public CA in NVS until replacement/factory reset. Source-only validation cannot prove encrypted-at-rest device state; provision secure boot plus flash/NVS encryption for physical extraction resistance. USB serial provisioning remains preferred deterministic config path.
+- Normal build artifacts consume no compile-time Wi-Fi, bearer, or CA header.
+  Runtime BLE/USB/folder provisioning is required; stale
+  `src/bridge_config.local.h` makes root build/release fail.
 
 ## Credits
 

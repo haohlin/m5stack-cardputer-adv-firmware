@@ -5,7 +5,7 @@
   "display_name": "Claude Cardputer Bridge",
   "version": "0.1.0",
   "description": "Local bridge between Claude and an M5Stack Cardputer ADV console.",
-  "long_description": "Runs a local MCP server plus localhost WebSocket bridge for optional Cardputer ADV features that are outside the official Claude Hardware Buddy BLE protocol.",
+  "long_description": "Runs a local MCP server, owner-protected Unix hook socket, and optional TLS WebSocket device bridge for Cardputer ADV features outside the official Claude Hardware Buddy BLE protocol.",
   "author": {
     "name": "Haohan Lin"
   },
@@ -21,8 +21,6 @@
       "command": "node",
       "args": ["${__dirname}/dist/index.js"],
       "env": {
-        "CARDPUTER_BRIDGE_PORT": "${user_config.bridge_port}",
-        "CARDPUTER_BRIDGE_BIND_HOST": "${user_config.bind_host}",
         "CARDPUTER_BRIDGE_DEVICE_BIND_HOST": "${user_config.device_bind_host}",
         "CARDPUTER_BRIDGE_DEVICE_PORT": "${user_config.device_port}",
         "CARDPUTER_BRIDGE_TLS_CERT": "${user_config.tls_cert_path}",
@@ -53,22 +51,6 @@
   "keywords": ["claude", "m5stack", "cardputer", "hardware-buddy", "mcp"],
   "license": "MIT",
   "user_config": {
-    "bridge_port": {
-      "type": "number",
-      "title": "Bridge Port",
-      "description": "Loopback-only HTTP hook and health port.",
-      "default": 17877,
-      "min": 1024,
-      "max": 65535,
-      "required": false
-    },
-    "bind_host": {
-      "type": "string",
-      "title": "Bind Host",
-      "description": "Deprecated compatibility alias for device_bind_host. Hook and health remain loopback-only.",
-      "default": "127.0.0.1",
-      "required": false
-    },
     "device_bind_host": {
       "type": "string",
       "title": "Secure Device Bind Host",
@@ -79,7 +61,7 @@
     "device_port": {
       "type": "number",
       "title": "Secure Device Port",
-      "description": "TLS WebSocket port. Defaults to hook port plus one when omitted.",
+      "description": "TLS WebSocket port. Defaults to 17878 when omitted.",
       "min": 1024,
       "max": 65535,
       "required": false

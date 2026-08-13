@@ -78,10 +78,11 @@ The plugin source lives in `claude-plugin/`. It can be tested with:
 claude --plugin-dir ./claude-plugin
 ```
 
-When installed, hooks call the local loopback bridge at
-`http://127.0.0.1:17877`. `CARDPUTER_BRIDGE_URL` may select a different
-loopback address or port only; remote hook URLs are rejected so the hook
-credential cannot leave the Mac.
+When installed, hooks call HTTP over mode-`0600` `hook.sock` derived inside
+mode-`0700` bridge config directory. No hook TCP listener or URL/socket override
+exists, so relay bearer is never sent to a port-squatting local process. Pairing
+config remains explicit protected local CLI/file output; MCP tools do not return
+device bearer material.
 
 Package desktop bridge and Claude plugin separately from firmware. Firmware
 release remains root `./cardputer release claude-buddy`; do not bundle a merged

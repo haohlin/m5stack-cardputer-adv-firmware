@@ -1,10 +1,6 @@
 #include "bridge_wifi.h"
 #include "bridge_config.h"
 
-#if defined(CARDPUTER_ADV) && __has_include("bridge_config.local.h")
-#include "bridge_config.local.h"
-#endif
-
 #if defined(CARDPUTER_ADV)
 
 #include <WiFi.h>
@@ -12,19 +8,8 @@
 #include <ArduinoJson.h>
 #include <esp_system.h>
 
-#ifndef CARDPUTER_BRIDGE_WIFI_PASS
-#define CARDPUTER_BRIDGE_WIFI_PASS ""
-#endif
-
-#ifndef CARDPUTER_BRIDGE_PORT
-#define CARDPUTER_BRIDGE_PORT 17878
-#endif
-
-#ifndef CARDPUTER_BRIDGE_FW_LABEL
-#define CARDPUTER_BRIDGE_FW_LABEL "cardputer-adv-dev"
-#endif
-
 namespace {
+constexpr char kBridgeFirmwareLabel[] = "cardputer-adv-bridge";
 enum WifiDiagPhase : uint8_t {
   WIFI_DIAG_NONE = 0,
   WIFI_DIAG_BOOT,
@@ -128,7 +113,7 @@ void sendHello() {
   char msg[160];
   snprintf(msg, sizeof(msg),
            "{\"v\":1,\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\"}",
-           _deviceName, CARDPUTER_BRIDGE_FW_LABEL);
+           _deviceName, kBridgeFirmwareLabel);
   _ws.sendTXT(msg);
 }
 
@@ -235,21 +220,7 @@ bool runtimeConfig(BridgeStoredConfig* out) {
     if (out) *out = bridgeConfig();
     return true;
   }
-#if defined(CARDPUTER_BRIDGE_WIFI_SSID) && defined(CARDPUTER_BRIDGE_CA)
-  if (out) {
-    memset(out, 0, sizeof(*out));
-    out->valid = true;
-    strncpy(out->ssid, CARDPUTER_BRIDGE_WIFI_SSID, sizeof(out->ssid) - 1);
-    strncpy(out->pass, CARDPUTER_BRIDGE_WIFI_PASS, sizeof(out->pass) - 1);
-    strncpy(out->host, CARDPUTER_BRIDGE_HOST, sizeof(out->host) - 1);
-    out->port = CARDPUTER_BRIDGE_PORT;
-    strncpy(out->token, CARDPUTER_BRIDGE_TOKEN, sizeof(out->token) - 1);
-    strncpy(out->ca, CARDPUTER_BRIDGE_CA, sizeof(out->ca) - 1);
-  }
-  return true;
-#else
   return false;
-#endif
 }
 }  // namespace
 

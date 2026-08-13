@@ -25,11 +25,13 @@ int main() {
   const uint32_t wrappedDeadline = rfidWriteArmDeadline(wrappedStart);
   assert(rfidArmStillValid(wrappedStart + 1, wrappedDeadline));
   assert(!rfidArmStillValid(wrappedDeadline, wrappedDeadline));
-  assert(rfidSerialDestructiveArmValid(started + 7999, deadline, true, true, "04 AA BB CC", "04 AA BB CC"));
-  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, false, true, "04 AA BB CC", "04 AA BB CC"));
-  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, true, false, "04 AA BB CC", "04 AA BB CC"));
-  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, true, true, "04 AA BB CC", "04 11 22 33"));
-  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, true, true, "", "04 AA BB CC"));
+  assert(rfidSerialDestructiveArmValid(started + 7999, deadline, RfidArmOrigin::PhysicalKeyboard, true, true, "04 AA BB CC", "04 AA BB CC"));
+  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, RfidArmOrigin::AutoCard, true, true, "04 AA BB CC", "04 AA BB CC"));
+  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, RfidArmOrigin::None, true, true, "04 AA BB CC", "04 AA BB CC"));
+  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, RfidArmOrigin::PhysicalKeyboard, false, true, "04 AA BB CC", "04 AA BB CC"));
+  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, RfidArmOrigin::PhysicalKeyboard, true, false, "04 AA BB CC", "04 AA BB CC"));
+  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, RfidArmOrigin::PhysicalKeyboard, true, true, "04 AA BB CC", "04 11 22 33"));
+  assert(!rfidSerialDestructiveArmValid(started + 7999, deadline, RfidArmOrigin::PhysicalKeyboard, true, true, "", "04 AA BB CC"));
 
   assert(rfidPersistFileAllowed(4096, RFID_MAX_SLOT_FILE_BYTES));
   assert(!rfidPersistFileAllowed(RFID_MAX_SLOT_FILE_BYTES + 1, RFID_MAX_SLOT_FILE_BYTES));

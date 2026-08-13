@@ -193,10 +193,10 @@ The firmware also accepts these USB serial commands at 115200 baud:
 - `clone [slot] confirm`
 - `write-block <block> <32hex> confirm` (rejected; physical UI has no matching
   literal-payload arm)
-- `keys` / `key add <12hex>` / `key clear` / `key reset`
+- `keys` / `key add <12hex>` / `key clear confirm` / `key reset confirm`
 - `trailers on|off`
 - `sd`
-- `clear [slot]`
+- `clear [slot] confirm`
 - `clear all confirm`
 - `reset-rfid`
 - `version`
@@ -213,6 +213,12 @@ Serial write also requires explicit confirmation:
 ```sh
 ./scripts/send_command.sh "write 1 confirm" /dev/cu.usbmodem2101
 ```
+
+Serial write/clone additionally requires fresh matching physical-key UI arm,
+selected slot/action, and exact present UID. Auto card detection may show normal
+on-device confirmation UI but never authorizes serial destruction. Slot/key
+clears require one exact trailing `confirm`; `confirmation`, `xconfirm`, and
+extra trailing tokens remain blocked.
 
 Literal block writes remain disabled even with exact confirmation:
 

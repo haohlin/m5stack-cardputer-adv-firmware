@@ -10,6 +10,12 @@ constexpr size_t RFID_MAX_KEY_FILE_BYTES = 16 * 1024;
 constexpr size_t RFID_MAX_PERSIST_LINE_CHARS = 128;
 constexpr size_t RFID_MAX_MIFARE_KEYS = 256;
 
+enum class RfidArmOrigin : uint8_t {
+  None = 0,
+  PhysicalKeyboard,
+  AutoCard,
+};
+
 inline size_t rfidConfirmedCommandLength(const char* command) {
   if (!command) return 0;
 
@@ -38,9 +44,11 @@ inline bool rfidArmStillValid(uint32_t nowMs, uint32_t deadlineMs) {
 }
 
 inline bool rfidSerialDestructiveArmValid(uint32_t nowMs, uint32_t deadlineMs,
-                                          bool physicalCardPresent, bool armMatchesSelection,
+                                          RfidArmOrigin origin, bool physicalCardPresent,
+                                          bool armMatchesSelection,
                                           const char* armedCardUid, const char* currentCardUid) {
-  return physicalCardPresent && armMatchesSelection && armedCardUid && armedCardUid[0] &&
+  return origin == RfidArmOrigin::PhysicalKeyboard && physicalCardPresent &&
+         armMatchesSelection && armedCardUid && armedCardUid[0] &&
          currentCardUid && strcmp(armedCardUid, currentCardUid) == 0 &&
          rfidArmStillValid(nowMs, deadlineMs);
 }

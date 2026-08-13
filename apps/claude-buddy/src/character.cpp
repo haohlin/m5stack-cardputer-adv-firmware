@@ -28,6 +28,8 @@ static bool    loaded = false;
 static Palette pal = { 0xC2A6, 0x0000, 0xFFFF, 0x8410, 0x0000 };
 static char    basePath[48];
 static const uint8_t MAX_GIFS = 32;
+static const uint32_t MAX_PACK_GIF_BYTES = 1800UL * 1024UL;
+static const uint16_t MAX_GIF_DIMENSION = 512;
 static char    gifPaths[MAX_GIFS][32];
 static uint8_t stateStart[N_STATES];
 static uint8_t stateCount[N_STATES];
@@ -102,6 +104,43 @@ static int32_t gifSeekCb(GIFFILE* pFile, int32_t iPosition) {
   f->seek(iPosition);
   pFile->iPos = (int32_t)f->position();
   return pFile->iPos;
+}
+
+static void gifDrawCb(GIFDRAW* d);
+
+static bool validGifAsset(const char* filename, uint32_t* totalBytes) {
+  if (!filename || !totalBytes) return false;
+  char full[80];
+  int length = snprintf(full, sizeof(full), "%s/%s", basePath, filename);
+  if (length <= 0 || (size_t)length >= sizeof(full)) return false;
+
+  File file = LittleFS.open(full, "r");
+  if (!file || file.isDirectory()) return false;
+  size_t bytes = file.size();
+  if (bytes < 10 || bytes > MAX_PACK_GIF_BYTES || *totalBytes > MAX_PACK_GIF_BYTES - bytes) {
+    file.close();
+    return false;
+  }
+  uint8_t header[10] = {};
+  size_t read = file.read(header, sizeof(header));
+  file.close();
+  bool signature = read == sizeof(header) &&
+                   (memcmp(header, "GIF87a", 6) == 0 || memcmp(header, "GIF89a", 6) == 0);
+  uint16_t headerWidth = (uint16_t)header[6] | ((uint16_t)header[7] << 8);
+  uint16_t headerHeight = (uint16_t)header[8] | ((uint16_t)header[9] << 8);
+  if (!signature || headerWidth == 0 || headerHeight == 0 ||
+      headerWidth > MAX_GIF_DIMENSION || headerHeight > MAX_GIF_DIMENSION) return false;
+
+  if (!gif.open(full, gifOpenCb, gifCloseCb, gifReadCb, gifSeekCb, gifDrawCb)) return false;
+  int canvasWidth = gif.getCanvasWidth();
+  int canvasHeight = gif.getCanvasHeight();
+  gif.close();
+  if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > MAX_GIF_DIMENSION ||
+      canvasHeight > MAX_GIF_DIMENSION || canvasWidth != headerWidth || canvasHeight != headerHeight) {
+    return false;
+  }
+  *totalBytes += bytes;
+  return true;
 }
 
 // --- Draw callback: one scanline → line buffer → pushImage ------------
@@ -207,8 +246,10 @@ bool characterInit(const char* name) {
   textMode = (mode && strcmp(mode, "text") == 0);
 
   JsonObject states = doc["states"];
+  if (states.isNull()) return false;
 
   if (textMode) {
+    bool usableText = false;
     for (uint8_t i = 0; i < N_STATES; i++) {
       TextState& ts = textStates[i];
       ts.nFrames = 0;
@@ -220,16 +261,21 @@ bool characterInit(const char* name) {
       for (JsonVariant v : fr) {
         if (ts.nFrames >= 8) break;
         const char* s = v.as<const char*>();
-        strncpy(ts.frames[ts.nFrames], s ? s : "", 19);
+        if (!s || !s[0]) continue;
+        strncpy(ts.frames[ts.nFrames], s, 19);
         ts.frames[ts.nFrames][19] = 0;
         ts.nFrames++;
+        usableText = true;
       }
     }
+    if (!usableText) return false;
     loaded = true;
     return true;
   }
 
   gifTotal = 0;
+  uint32_t totalGifBytes = 0;
+  gif.begin(LITTLE_ENDIAN_PIXELS);
   for (uint8_t i = 0; i < N_STATES; i++) {
     stateStart[i] = gifTotal;
     stateCount[i] = 0;
@@ -239,16 +285,18 @@ bool characterInit(const char* name) {
       for (JsonVariant e : v.as<JsonArray>()) {
         const char* fn = e.as<const char*>();
         if (fn && !buddyAppendPath(gifPaths, gifTotal, fn)) return false;
+        if (fn && !validGifAsset(fn, &totalGifBytes)) return false;
         if (fn) stateCount[i]++;
       }
     } else {
       const char* fn = v.as<const char*>();
       if (fn && !buddyAppendPath(gifPaths, gifTotal, fn)) return false;
+      if (fn && !validGifAsset(fn, &totalGifBytes)) return false;
       if (fn) stateCount[i] = 1;
     }
   }
 
-  gif.begin(LITTLE_ENDIAN_PIXELS);
+  if (gifTotal == 0 || totalGifBytes == 0) return false;
   loaded = true;
   return true;
 }

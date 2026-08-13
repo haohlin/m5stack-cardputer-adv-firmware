@@ -28,34 +28,11 @@ run_capture() {
 redact_json_file() {
   local src="$1"
   local dst="$2"
-  "$PY" - "$src" "$dst" <<'PY' || true
-import json
-import pathlib
-import sys
-
-src = pathlib.Path(sys.argv[1])
-dst = pathlib.Path(sys.argv[2])
-if not src.exists():
-    dst.write_text("not found\n")
-    raise SystemExit
-
-data = json.loads(src.read_text())
-
-def redact(obj):
-    if isinstance(obj, dict):
-        out = {}
-        for key, value in obj.items():
-            if key.lower() in {"token", "password", "pass", "secret", "key"}:
-                out[key] = "<redacted>"
-            else:
-                out[key] = redact(value)
-        return out
-    if isinstance(obj, list):
-        return [redact(v) for v in obj]
-    return obj
-
-dst.write_text(json.dumps(redact(data), indent=2) + "\n")
-PY
+  if [[ ! -f "$src" ]]; then
+    printf 'not found\n' >"$dst"
+    return
+  fi
+  "$PY" "$SCRIPT_DIR/redact_debug_json.py" "$src" "$dst" || true
 }
 
 collect_device_status() {
@@ -139,8 +116,10 @@ else
   printf 'no port detected\n' >"$OUT/device-status.json"
 fi
 
-if command -v curl >/dev/null 2>&1; then
-  run_capture bridge-health curl -fsS http://127.0.0.1:17877/health
+bridge_config="${CARDPUTER_BRIDGE_CONFIG:-$HOME/.claude-cardputer-bridge/config.json}"
+bridge_socket="$(dirname "$bridge_config")/hook.sock"
+if command -v curl >/dev/null 2>&1 && [[ -S "$bridge_socket" ]]; then
+  run_capture bridge-health curl --unix-socket "$bridge_socket" -fsS http://localhost/health
 fi
 
 claude_log="$HOME/Library/Logs/Claude/main.log"
@@ -173,12 +152,13 @@ Files:
 - \`device-status.json\`: skipped by default; set \`CARDPUTER_DEBUG_SERIAL=1\`
   to query device \`{"cmd":"status"}\` over USB CDC
 - \`bridge-config-*.redacted.json\`: redacted bridge config
-- \`bridge-health\`: local bridge health endpoint, if running
+- \`bridge-health\`: Unix-socket bridge health endpoint, if running
 - \`claude-buddy-log.txt\`: content-free skip marker by default; set
   \`CARDPUTER_DEBUG_INCLUDE_CONTENT=1\` only for a private reviewed bundle
 
-Secrets are redacted from JSON files by key name. Claude content is excluded by
-default; opt-in log capture is not redacted. Review before sharing.
+Secrets are redacted recursively from JSON by case-insensitive credential-style
+key names. Claude content is excluded by default; opt-in log capture is not
+redacted. Review before sharing.
 EOF
 
 ansi_ok "Debug bundle written: $OUT"

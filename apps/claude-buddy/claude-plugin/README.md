@@ -10,12 +10,13 @@ command list.
 Hooks relay to the local bridge:
 
 ```text
-http://127.0.0.1:17877/hook
+~/.claude-cardputer-bridge/hook.sock (HTTP over Unix-domain socket)
 ```
 
-`CARDPUTER_BRIDGE_URL` may select a different loopback address or port only.
-The hook service is intentionally not a LAN endpoint, so remote URLs are
-rejected.
+Socket path is derived from protected bridge config directory and has no URL,
+port, or socket-path environment override. Relay reads marked mode-`0600`
+config only, bounds stdin/request/response to 32 KiB, sends hook bearer as
+defense in depth, and prints only validated expected hook JSON.
 
 ## Test Locally
 

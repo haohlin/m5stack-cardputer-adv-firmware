@@ -65,7 +65,7 @@ outside normal app OTA path.
   files only and rejects directories and symlinks before complete size accounting.
 - Formatted protocol replies transmit only when `snprintf` reports complete
   output within the destination buffer.
-- Optional Wi-Fi bridge splits loopback-only HTTP health/hooks from separate
+- Optional Wi-Fi bridge splits owner-only Unix-socket HTTP health/hooks from separate
   TLS WebSocket device listener. Hook/device use independent 32-character
   URL-safe bearer credentials generated from 24 CSPRNG bytes by the desktop
   bridge. Caller-provided credential environment variables are rejected, and
@@ -74,9 +74,16 @@ outside normal app OTA path.
   untrusted BLE/file input; they do not prove entropy. Normal provisioning trusts
   a physically controlled BLE/USB setter and the desktop bridge as CSPRNG
   authority. Hook input, pending questions, and timeouts are bounded before parsing.
-  Hook HTTP uses 15-second request, 10-second header, and 5-second keep-alive
-  timeouts, at most 32 connections, and 16 requests per socket. Health exposes
-  no summary, device state, or device identity.
+  Hook socket is derived inside mode-`0700` config directory, mode `0600`, has
+  no override, and retains bearer defense in depth. HTTP uses 15-second request,
+  10-second header, and 5-second keep-alive timeouts, at most 32 connections, 16
+  requests per socket, and 32 KiB stdin/body/response bounds. Health exposes no
+  summary, device state, or identity. MCP tools never return pairing bearer;
+  protected local pairing-file CLI remains.
+- TLS device listener parses origin-form upgrade target against fixed base,
+  ignores `Host`, and bounds handshake/idle/request/header/keep-alive time,
+  connections, requests per socket, and 4096-byte text frames before auth/JSON.
+  Device `hello`/`state` retain only bounded whitelisted fields.
 - Physical Wi-Fi pairing accepts only complete `wss://.../device` replacement
   config containing endpoint, pairing token, and public PEM CA. Firmware sends
   token in Authorization header and uses CA-validated `beginSslWithCA`; it
@@ -88,10 +95,15 @@ outside normal app OTA path.
   commit precedes legacy-key cleanup. Forget reports success and disarms Wi-Fi
   only after persistent blob removal succeeds.
 - Character packs stage in reserved LittleFS. Transfer abort, timeout,
-  malformed input, and incomplete content retain active character; only fully
-  received/parsed pack replaces it. ZIP prep bounds members, compressed and
-  expanded bytes, expansion ratio, safe names, and temporary extraction.
-- Debug bundles redact configured secrets and omit Claude content unless
+  malformed input, incomplete content, missing/malformed GIF, unsupported empty
+  state, bad dimensions, or decoder-open failure retain active character. ZIP
+  and directory prep share hard source byte/dimension/frame/state/pixel/output
+  bounds; output over 1.8 MB is error, not warning.
+- Normal builds reject stale local compatibility header and consume no
+  compile-time Wi-Fi/bearer/CA secret. Secure WSS remains available through
+  runtime BLE/USB/folder provisioning only.
+- Debug bundles recursively redact case-insensitive credential-style JSON keys,
+  including camelCase token/bearer/authorization fields, and omit Claude content unless
   `CARDPUTER_DEBUG_INCLUDE_CONTENT=1`; that private opt-in is not redacted.
 - Wi-Fi password/pairing token require NVS. Source does not establish at-rest
   encryption: physical extraction resistance needs secure boot plus flash/NVS
@@ -117,13 +129,20 @@ outside normal app OTA path.
   image is safe. The volume and its direct `tools/` child must be real
   directories, not symlink aliases; cleanup is limited to the fixed
   `RFID2-Clone-Station-v*` artifact family and skips symlinks.
+- Root `./cardputer stage <app>` uses same containment for every app: validated
+  non-symlink root/direct `tools`, no-follow directory descriptor, exclusive
+  regular temporary file, read-back SHA-256 and fsync, atomic in-directory
+  replacement, and family-scoped cleanup. Target/temp symlinks fail closed.
 - Serial `write`/`clone` require exact trailing `confirm` plus matching fresh
-  physical UI arm, target slot, and present card inside eight-second window. The
+  physical-key UI arm, target slot, and present card inside eight-second window.
+  Auto card-detection arm never authorizes serial execution. The
   first card identity visible for that arm is retained until cancel/expiry;
   serial execution reselects the card and rejects an identity swap. Serial
   literal `write-block` is disabled because arbitrary payload has no existing
   physical UI arm. Physical UI write/clone behavior remains unchanged, including
   arming before presenting a destination card.
+- Serial slot clear, key clear, and key reset require one exact trailing
+  `confirm`; substring or extra-token forms remain blocked.
 - RFID dump/key data on removable microSD and USB serial is owner-operated lab
   data. This release does not claim encrypted storage; confidential deployments
   need user-approved encrypted storage or hardware-backed key design.

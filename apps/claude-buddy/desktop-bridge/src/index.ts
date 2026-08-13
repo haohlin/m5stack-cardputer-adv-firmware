@@ -2,10 +2,10 @@
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createSecureServer } from "node:https";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { WebSocketServer, type WebSocket } from "ws";
+import { dirname, join, resolve } from "node:path";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod/v4";
@@ -22,6 +22,14 @@ const HOOK_HEADERS_TIMEOUT_MS = 10_000;
 const HOOK_KEEP_ALIVE_TIMEOUT_MS = 5_000;
 const HOOK_MAX_CONNECTIONS = 32;
 const HOOK_MAX_REQUESTS_PER_SOCKET = 16;
+const DEVICE_REQUEST_TIMEOUT_MS = 15_000;
+const DEVICE_HEADERS_TIMEOUT_MS = 10_000;
+const DEVICE_KEEP_ALIVE_TIMEOUT_MS = 5_000;
+const DEVICE_IDLE_TIMEOUT_MS = 15_000;
+const DEVICE_TLS_HANDSHAKE_TIMEOUT_MS = 10_000;
+const DEVICE_MAX_CONNECTIONS = 32;
+const DEVICE_MAX_REQUESTS_PER_SOCKET = 16;
+const DEVICE_MAX_FRAME_BYTES = 4096;
 const CREDENTIAL_PROVENANCE = "bridge-csprng-v1";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -85,6 +93,21 @@ function configPath(): string {
   return process.env.CARDPUTER_BRIDGE_CONFIG || join(homedir(), ".claude-cardputer-bridge", "config.json");
 }
 
+function secureConfigDirectory(path: string): string {
+  const directory = dirname(resolve(path));
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const info = lstatSync(directory);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error(`bridge config directory must be one real directory: ${directory}`);
+  }
+  chmodSync(directory, 0o700);
+  return directory;
+}
+
+export function bridgeHookSocketPath(path: string): string {
+  return join(dirname(resolve(path)), "hook.sock");
+}
+
 function readPersisted(path: string): PersistedConfig {
   if (!existsSync(path)) return {};
   try { return JSON.parse(readFileSync(path, "utf8")) as PersistedConfig; }
@@ -92,10 +115,39 @@ function readPersisted(path: string): PersistedConfig {
 }
 
 function writePersisted(path: string, config: PersistedConfig): void {
-  mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
+  secureConfigDirectory(path);
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   // `mode` only governs a newly-created file; tighten an existing config too.
   chmodSync(path, 0o600);
+}
+
+export function parseDeviceUpgradeTarget(target: string | undefined): URL | null {
+  if (!target || !target.startsWith("/") || target.startsWith("//")) return null;
+  try {
+    const parsed = new URL(target, "https://bridge.invalid");
+    return parsed.origin === "https://bridge.invalid" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+interface AdmissionServer {
+  requestTimeout: number;
+  headersTimeout: number;
+  keepAliveTimeout: number;
+  maxConnections: number;
+  maxRequestsPerSocket: number | null;
+  setTimeout(milliseconds: number, callback?: () => void): unknown;
+}
+
+export function configureDeviceServerAdmission<T extends AdmissionServer>(server: T): T {
+  server.requestTimeout = DEVICE_REQUEST_TIMEOUT_MS;
+  server.headersTimeout = DEVICE_HEADERS_TIMEOUT_MS;
+  server.keepAliveTimeout = DEVICE_KEEP_ALIVE_TIMEOUT_MS;
+  server.maxConnections = DEVICE_MAX_CONNECTIONS;
+  server.maxRequestsPerSocket = DEVICE_MAX_REQUESTS_PER_SOCKET;
+  server.setTimeout(DEVICE_IDLE_TIMEOUT_MS);
+  return server;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
@@ -138,13 +190,13 @@ function text(value: unknown, fallback = ""): string {
 }
 
 function jsonResponse(res: ServerResponse, status: number, body: Json): void {
-  const payload = `${JSON.stringify(body)}\n`;
+  let payload = `${JSON.stringify(body)}\n`;
+  if (Buffer.byteLength(payload) > MAX_HOOK_BODY_BYTES) {
+    status = 500;
+    payload = '{"ok":false,"error":"response too large"}\n';
+  }
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(payload) });
   res.end(payload);
-}
-
-function isLoopback(address: string | undefined): boolean {
-  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
 function secureEqual(actual: string | undefined, expected: string): boolean {
@@ -193,7 +245,7 @@ export class CardputerBridge {
   private lastSummary = "";
   private hookServer = createServer((req, res) => void this.handleHookHttp(req, res));
   private deviceServer: ReturnType<typeof createSecureServer> | null = null;
-  private wsServer = new WebSocketServer({ noServer: true });
+  private wsServer = new WebSocketServer({ noServer: true, maxPayload: DEVICE_MAX_FRAME_BYTES });
 
   constructor(private readonly config: BridgeConfig) {
     this.hookServer.requestTimeout = HOOK_REQUEST_TIMEOUT_MS;
@@ -215,17 +267,33 @@ export class CardputerBridge {
   }
 
   async start(): Promise<void> {
-    await this.listen(this.hookServer, this.config.hookPort, "127.0.0.1");
+    const socketPath = bridgeHookSocketPath(this.config.configPath);
+    secureConfigDirectory(this.config.configPath);
+    if (existsSync(socketPath)) {
+      const existing = lstatSync(socketPath);
+      if (!existing.isSocket()) throw new Error(`hook socket path exists and is not a socket: ${socketPath}`);
+      if (typeof process.getuid === "function" && existing.uid !== process.getuid()) {
+        throw new Error(`hook socket is not owned by current user: ${socketPath}`);
+      }
+      unlinkSync(socketPath);
+    }
+    await this.listenUnix(this.hookServer, socketPath);
+    chmodSync(socketPath, 0o600);
     const tls = this.tlsMaterial();
     if (!tls) {
-      console.error("Cardputer hook service listening on 127.0.0.1:%d; secure device listener disabled until TLS paths are configured", this.config.hookPort);
+      console.error(`Cardputer hook service listening on owner-protected Unix socket ${socketPath}; secure device listener disabled until TLS paths are configured`);
       return;
     }
-    this.deviceServer = createSecureServer({ cert: tls.cert, key: tls.key }, (_req, res) => jsonResponse(res, 404, { ok: false, error: "not found" }));
-    this.deviceServer.requestTimeout = 15_000;
+    this.deviceServer = createSecureServer({
+      cert: tls.cert,
+      key: tls.key,
+      handshakeTimeout: DEVICE_TLS_HANDSHAKE_TIMEOUT_MS
+    }, (_req, res) => jsonResponse(res, 404, { ok: false, error: "not found" }));
+    configureDeviceServerAdmission(this.deviceServer);
     this.deviceServer.on("upgrade", (req, socket, head) => {
-      const url = new URL(req.url || "/", `https://${req.headers.host || "localhost"}`);
-      if (url.pathname !== "/device" || url.search || !secureEqual(bearer(req), this.config.token)) {
+      const url = parseDeviceUpgradeTarget(req.url);
+      if (!url || url.pathname !== "/device" || url.search || url.hash ||
+          !secureEqual(bearer(req), this.config.token)) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
@@ -233,7 +301,7 @@ export class CardputerBridge {
       this.wsServer.handleUpgrade(req, socket, head, ws => this.attachDevice(ws));
     });
     await this.listen(this.deviceServer, this.config.devicePort, this.config.deviceHost);
-    console.error(`Cardputer secure device listener on ${this.config.deviceHost}:${this.config.devicePort}; hook service on 127.0.0.1:${this.config.hookPort}`);
+    console.error(`Cardputer secure device listener on ${this.config.deviceHost}:${this.config.devicePort}; hook service on owner-protected Unix socket`);
   }
 
   async stop(): Promise<void> {
@@ -248,6 +316,8 @@ export class CardputerBridge {
       this.deviceServer ? this.close(this.deviceServer) : Promise.resolve()
     ]);
     this.wsServer.close();
+    const socketPath = bridgeHookSocketPath(this.config.configPath);
+    if (existsSync(socketPath) && lstatSync(socketPath).isSocket()) unlinkSync(socketPath);
   }
 
   private listen(server: ReturnType<typeof createServer> | ReturnType<typeof createSecureServer>, port: number, host: string): Promise<void> {
@@ -257,17 +327,24 @@ export class CardputerBridge {
     });
   }
 
+  private listenUnix(server: ReturnType<typeof createServer>, socketPath: string): Promise<void> {
+    return new Promise((resolveStart, rejectStart) => {
+      server.once("error", rejectStart);
+      server.listen(socketPath, () => { server.off("error", rejectStart); resolveStart(); });
+    });
+  }
+
   private close(server: ReturnType<typeof createServer> | ReturnType<typeof createSecureServer>): Promise<void> {
     return new Promise(resolveClose => server.close(() => resolveClose()));
   }
 
   status(): Record<string, unknown> {
     const hasDevice = Boolean(this.device && this.device.readyState === this.device.OPEN);
-    return { ok: true, hookPort: this.config.hookPort, devicePort: this.config.devicePort, deviceListener: Boolean(this.deviceServer), hasDevice, queuedPrompts: this.promptQueue.length, pendingQuestions: this.pending.size, deviceInfo: this.deviceInfo, deviceState: this.deviceState };
+    return { ok: true, hookTransport: "unix", devicePort: this.config.devicePort, deviceListener: Boolean(this.deviceServer), hasDevice, queuedPrompts: this.promptQueue.length, pendingQuestions: this.pending.size, deviceInfo: this.deviceInfo, deviceState: this.deviceState };
   }
 
   health(): Record<string, unknown> {
-    return { ok: true, hookPort: this.config.hookPort, deviceListener: Boolean(this.deviceServer) };
+    return { ok: true, hookTransport: "unix", deviceListener: Boolean(this.deviceServer) };
   }
 
   notify(title: string, message: string, level = "info"): boolean {
@@ -300,25 +377,53 @@ export class CardputerBridge {
 
   writePairingConfig(dir: string, endpoint?: string): void {
     const target = resolve(dir);
-    mkdirSync(target, { recursive: true, mode: 0o700 });
-    writeFileSync(join(target, "manifest.json"), `${JSON.stringify({ name: "bridge-config", type: "claude-cardputer-bridge", version: PROTOCOL_VERSION }, null, 2)}\n`, { mode: 0o600 });
-    writeFileSync(join(target, "bridge.json"), `${JSON.stringify(this.pairingConfig(endpoint), null, 2)}\n`, { mode: 0o600 });
+    if (existsSync(target)) throw new Error(`pairing output already exists: ${target}`);
+    mkdirSync(target, { recursive: false, mode: 0o700 });
+    chmodSync(target, 0o700);
+    writeFileSync(join(target, "manifest.json"), `${JSON.stringify({ name: "bridge-config", type: "claude-cardputer-bridge", version: PROTOCOL_VERSION }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    writeFileSync(join(target, "bridge.json"), `${JSON.stringify(this.pairingConfig(endpoint), null, 2)}\n`, { mode: 0o600, flag: "wx" });
   }
 
   private attachDevice(ws: WebSocket): void {
     if (this.device && this.device.readyState === this.device.OPEN) this.device.close(1000, "replaced");
     this.device = ws; this.deviceInfo = {}; this.deviceState = {};
-    ws.on("message", data => this.handleDeviceMessage(String(data)));
+    ws.on("message", (data, isBinary) => {
+      const bytes = this.deviceFrameBytes(data);
+      if (isBinary) { ws.close(1003, "text frames only"); return; }
+      if (bytes > DEVICE_MAX_FRAME_BYTES) { ws.close(1009, "frame too large"); return; }
+      this.handleDeviceMessage(this.deviceFrameText(data));
+    });
     ws.on("close", () => { if (this.device === ws) this.device = null; });
     this.send({ v: PROTOCOL_VERSION, type: "bridge.status", connected: true });
+  }
+
+  private deviceFrameBytes(data: RawData): number {
+    if (Array.isArray(data)) return data.reduce((total, part) => total + part.length, 0);
+    return data instanceof ArrayBuffer ? data.byteLength : data.length;
+  }
+
+  private deviceFrameText(data: RawData): string {
+    if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+    return Buffer.from(data instanceof ArrayBuffer ? new Uint8Array(data) : data).toString("utf8");
   }
 
   private handleDeviceMessage(raw: string): void {
     let msg: DeviceMessage;
     try { msg = JSON.parse(raw) as DeviceMessage; } catch { return; }
     if (msg.v !== PROTOCOL_VERSION || typeof msg.type !== "string") return;
-    if (msg.type === "hello") { this.deviceInfo = { ...msg }; this.send({ v: PROTOCOL_VERSION, type: "bridge.status", connected: true }); return; }
-    if (msg.type === "state") { this.deviceState = { ...msg }; return; }
+    if (msg.type === "hello") {
+      this.deviceInfo = { device: text(msg.device).slice(0, 48), fw: text(msg.fw).slice(0, 48) };
+      this.send({ v: PROTOCOL_VERSION, type: "bridge.status", connected: true });
+      return;
+    }
+    if (msg.type === "state") {
+      const battery = typeof msg.battery === "number" && Number.isFinite(msg.battery)
+        ? Math.max(0, Math.min(100, Math.trunc(msg.battery))) : 0;
+      const heap = typeof msg.heap === "number" && Number.isFinite(msg.heap)
+        ? Math.max(0, Math.min(16 * 1024 * 1024, Math.trunc(msg.heap))) : 0;
+      this.deviceState = { battery, ble: msg.ble === true, page: text(msg.page).slice(0, 48), heap };
+      return;
+    }
     if (msg.type === "prompt.draft" || msg.type === "voice.text") {
       const draft: PromptDraft = { id: text(msg.id, `draft_${Date.now().toString(36)}`), text: text(msg.text), source: msg.type === "voice.text" ? "voice" : "keyboard", createdAt: new Date().toISOString() };
       if (draft.text) { this.promptQueue.push(draft); this.promptQueue = this.promptQueue.slice(-10); }
@@ -337,9 +442,9 @@ export class CardputerBridge {
   }
 
   private async handleHookHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url || "/", "http://127.0.0.1");
     try {
-      if (!isLoopback(req.socket.remoteAddress)) throw new HttpError(403, "loopback only");
+      const url = new URL(req.url || "/", "http://unix.invalid");
+      if (req.socket.remoteAddress) throw new HttpError(403, "Unix socket only");
       if (req.method === "GET" && url.pathname === "/health") { jsonResponse(res, 200, this.health() as Json); return; }
       if (req.method === "POST" && url.pathname === "/hook") {
         if (!secureEqual(bearer(req), this.config.hookToken)) throw new HttpError(401, "unauthorized");
@@ -376,7 +481,7 @@ export class CardputerBridge {
   }
 }
 
-function registerTools(server: McpServer, bridge: CardputerBridge): void {
+export function registerTools(server: McpServer, bridge: CardputerBridge): void {
   server.registerTool("notify_cardputer", { description: "Send a concise status or summary to connected Cardputer.", inputSchema: { title: z.string().max(48).default("Claude"), message: z.string().max(MAX_TEXT), level: z.enum(["info", "attention", "success", "warning", "error"]).default("info") } }, async ({ title, message, level }) => {
     const delivered = bridge.notify(title, message, level); return { content: [{ type: "text", text: delivered ? "Sent to Cardputer." : "No Cardputer connected." }], structuredContent: { delivered } };
   });
@@ -388,9 +493,6 @@ function registerTools(server: McpServer, bridge: CardputerBridge): void {
   });
   server.registerTool("device_status", { description: "Report bridge and Cardputer connection status.", inputSchema: {} }, async () => {
     const status = bridge.status(); return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }], structuredContent: status };
-  });
-  server.registerTool("generate_pairing_config", { description: "Return secure bridge pairing JSON for Cardputer.", inputSchema: { endpoint: z.string().optional() } }, async ({ endpoint }) => {
-    const config = bridge.pairingConfig(endpoint); return { content: [{ type: "text", text: JSON.stringify(config, null, 2) }], structuredContent: config };
   });
 }
 

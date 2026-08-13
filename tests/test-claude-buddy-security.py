@@ -77,10 +77,8 @@ class ClaudeBuddySecurityTests(unittest.TestCase):
         self.assertFalse(helper.bridge_token_allowed("Az09_-bcDE12fgHI34jkLM56noPQ78r+"))
         serial = (BUDDY / "scripts" / "write_bridge_config_serial.sh").read_text()
         folder = (BUDDY / "scripts" / "write_bridge_config_folder.sh").read_text()
-        header = (BUDDY / "scripts" / "write_bridge_config_header.sh").read_text()
         self.assertIn("load_bridge_token(path)", serial)
         self.assertIn('bridge_token.py"', folder)
-        self.assertIn('bridge_token.py"', header)
         with tempfile.TemporaryDirectory() as tmp:
             marked = Path(tmp) / "marked.json"
             marked.write_text(json.dumps({
@@ -134,6 +132,61 @@ class ClaudeBuddySecurityTests(unittest.TestCase):
             output = prep.OUT_ROOT / "safe-pet"
             self.assertTrue((output / "idle.gif").is_file())
             self.assertEqual(json.loads((output / "manifest.json").read_text())["name"], "safe-pet")
+
+    def test_prep_rejects_directory_resource_boundaries_before_retention(self):
+        prep = load_module("prep_character_bounds", BUDDY / "tools" / "prep_character.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            manifest = {"name": "safe-pet", "states": {"idle": "idle.gif"}}
+            (source / "manifest.json").write_text(json.dumps(manifest))
+            oversized = source / "idle.gif"
+            oversized.write_bytes(b"GIF89a")
+            oversized.write_bytes(b"x" * (prep.MAX_SOURCE_IMAGE_BYTES + 1))
+            prep.OUT_ROOT = root / "characters"
+            with self.assertRaisesRegex(ValueError, "source image byte limit"):
+                prep.install(source)
+
+            oversized.unlink()
+            Image.new("P", (prep.MAX_IMAGE_WIDTH + 1, 1)).save(oversized, format="GIF")
+            with self.assertRaisesRegex(ValueError, "image dimensions"):
+                prep.install(source)
+
+    def test_prep_bounds_state_count_aggregate_pixels_and_output(self):
+        prep = load_module("prep_character_aggregate", BUDDY / "tools" / "prep_character.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(source / "idle.gif")
+            prep.OUT_ROOT = root / "characters"
+
+            second = Image.new("RGBA", (2, 2), (0, 255, 0, 255))
+            first = Image.new("RGBA", (2, 2), (255, 0, 0, 255))
+            first.save(source / "idle.gif", save_all=True, append_images=[second], duration=[10, 10], loop=0)
+            prep.MAX_FRAMES_PER_IMAGE = 1
+            (source / "manifest.json").write_text(json.dumps({"name": "safe-pet", "states": {"idle": "idle.gif"}}))
+            with self.assertRaisesRegex(ValueError, "frame count"):
+                prep.install(source)
+            prep.MAX_FRAMES_PER_IMAGE = 256
+            Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(source / "idle.gif")
+
+            too_many = {f"state{i}": "idle.gif" for i in range(prep.MAX_STATE_COUNT + 1)}
+            (source / "manifest.json").write_text(json.dumps({"name": "safe-pet", "states": too_many}))
+            with self.assertRaisesRegex(ValueError, "state count"):
+                prep.install(source)
+
+            (source / "manifest.json").write_text(json.dumps({"name": "safe-pet", "states": {"idle": "idle.gif"}}))
+            prep.MAX_TOTAL_SOURCE_PIXELS = 3
+            with self.assertRaisesRegex(ValueError, "decoded pixel limit"):
+                prep.install(source)
+
+            prep.MAX_TOTAL_SOURCE_PIXELS = 100
+            prep.MAX_OUTPUT_BYTES = 1
+            with self.assertRaisesRegex(ValueError, "output byte limit"):
+                prep.install(source)
+            self.assertFalse((prep.OUT_ROOT / "safe-pet").exists())
 
     def test_prep_rejects_unsafe_or_expanding_zip_before_extracting(self):
         prep = load_module("prep_character_zip", BUDDY / "tools" / "prep_character.py")
@@ -241,8 +294,32 @@ class ClaudeBuddySecurityTests(unittest.TestCase):
         self.assertNotIn('prefs.getString("br_', config)
         self.assertNotIn('prefs.putBool("br_valid"', config)
         self.assertNotIn('prefs.getBool("br_valid"', config)
-        self.assertIn('out[key] = "<redacted>"', bundle)
+        self.assertIn('redact_debug_json.py" "$src" "$dst"', bundle)
         self.assertNotIn('print(cfg.token)', config)
+
+    def test_debug_json_redaction_covers_nested_camel_case_secret_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "input.json"
+            output = root / "output.json"
+            secrets = {
+                "hookToken": "hook-secret",
+                "nested": {
+                    "wifiPassword": "wifi-secret",
+                    "authorizationHeader": "bearer-secret",
+                    "credentialValue": "credential-secret",
+                    "safe": "visible",
+                },
+            }
+            source.write_text(json.dumps(secrets))
+            subprocess.run(
+                ["python3", str(BUDDY / "scripts" / "redact_debug_json.py"), str(source), str(output)],
+                check=True,
+            )
+            redacted = output.read_text()
+            self.assertIn('"safe": "visible"', redacted)
+            for secret in ("hook-secret", "wifi-secret", "bearer-secret", "credential-secret"):
+                self.assertNotIn(secret, redacted)
 
     def test_bridge_requires_complete_ca_validated_config(self):
         config = (BUDDY / "src" / "bridge_config.cpp").read_text()

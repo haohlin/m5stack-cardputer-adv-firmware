@@ -29,6 +29,7 @@ void resetHarness() {
   fakeSettings = FakeSettings{};
   fakeBridgeConfigSaved = false;
   fakeBridgeConfigClearResult = true;
+  fakeCharacterInitResult = true;
 }
 
 bool ackIs(const char* command, bool ok) {
@@ -294,6 +295,29 @@ bool testCompletedReplacementCommitsStagedCharacter() {
   return true;
 }
 
+bool testSemanticValidationFailureKeepsActiveCharacter() {
+  resetHarness();
+  LittleFS.seedFile("/characters/live/manifest.json", "old");
+  LittleFS.seedFile("/characters/live/idle.gif", "old-gif");
+  auto start = begin("next", 1);
+  send(start);
+  auto openFile = file("idle.gif", 1);
+  send(openFile);
+  auto data = chunk("QQ==");
+  send(data);
+  auto endFile = command("file_end");
+  send(endFile);
+  fakeCharacterInitResult = false;
+  auto endCharacter = command("char_end");
+  send(endCharacter);
+  CHECK(ackIs("char_end", false));
+  CHECK(LittleFS.readText("/characters/live/manifest.json") == "old");
+  CHECK(LittleFS.readText("/characters/live/idle.gif") == "old-gif");
+  CHECK(!LittleFS.exists("/characters/incoming"));
+  CHECK(!LittleFS.exists("/characters/next"));
+  return true;
+}
+
 }  // namespace
 
 int main() {
@@ -310,6 +334,7 @@ int main() {
       {"timeout", testTimeoutAbortsAndRemovesPartialCharacter},
       {"incomplete replacement preserves active character", testIncompleteReplacementKeepsActiveCharacter},
       {"completed replacement commits staged character", testCompletedReplacementCommitsStagedCharacter},
+      {"semantic validation failure preserves active character", testSemanticValidationFailureKeepsActiveCharacter},
       {"valid bridge config", testValidBridgeConfigStillSaves},
       {"bridge forget persistence", testBridgeForgetOnlyDisarmsWifiAfterPersistentClear},
       {"insecure or partial bridge config", testInsecureOrPartialBridgeConfigIsRejected},

@@ -18,6 +18,8 @@ class Rfid2SecurityTests(unittest.TestCase):
         self.assertIn("rfidConfirmedCommandLength(tail.c_str())", source)
         self.assertIn("serialDestructiveCardReady(PendingAction::WriteSlot", source)
         self.assertIn("serialDestructiveCardReady(PendingAction::CloneSlot", source)
+        self.assertIn("RfidArmOrigin::PhysicalKeyboard", source)
+        self.assertIn("RfidArmOrigin::AutoCard", source)
         self.assertIn("armedCardUid = uid;", source)
         self.assertIn("armedCardUid = \"\";", source)
         self.assertIn("writeStoredDumpToSelectedClassic1k((uint8_t)parsedSlot)", source)
@@ -27,6 +29,9 @@ class Rfid2SecurityTests(unittest.TestCase):
         self.assertGreaterEqual(source.count("rfidPersistFileAllowed("), 3)
         self.assertGreaterEqual(source.count("rfidPersistLineAllowed("), 3)
         self.assertIn("rfidKeyCountAllowsInsert(mifareKeys.size())", source)
+        self.assertIn("key clear requires exact trailing confirm", source)
+        self.assertIn("key reset requires exact trailing confirm", source)
+        self.assertIn("clear slot requires exact trailing confirm", source)
 
     def test_embedded_confirmation_and_persistence_bounds(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -147,9 +147,9 @@ Sources:
    public PEM CA, and high-entropy pairing token as a complete replacement.
    Firmware sends bearer token in the upgrade Authorization header and uses
    CA-validated TLS; do not add insecure TLS or token query compatibility.
-10. Keep hook/health HTTP loopback-only and separate from LAN device listener.
-    Health must remain content-free; hook needs independent local credential and
-    bounded request/pending work before JSON parsing.
+10. Keep hook/health HTTP on owner-protected Unix-domain socket, never TCP, and
+    separate from LAN device listener. Health remains content-free; hook keeps
+    independent credential plus bounded request/pending work before JSON parsing.
 11. Keep Wi-Fi radio off when the bridge is disabled:
    `WiFi.disconnect(true, false)` or equivalent plus `WiFi.mode(WIFI_OFF)`.
 12. Prefer lower TX power during bring-up/testing, then expose a setting only if
@@ -159,7 +159,7 @@ Sources:
 14. For field debugging, capture:
     - serial ROM reset reason
     - firmware `status` ack
-    - bridge `/health`
+    - bridge Unix-socket `/health`
     - current saved bridge config with secrets redacted
 
 ## Current Boot-Loop Hypothesis
