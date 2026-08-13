@@ -10,6 +10,11 @@ bash -n cardputer tools/cardputer/common.sh
 ./cardputer apps | rg -qx 'claude-buddy Claude Desktop Buddy'
 ./cardputer install-help | rg -q 'Launcher Settings -> USB MSC'
 
+grep -qx 'APP_VERSION="1.4.0"' apps/claude-buddy/app.env
+grep -qx 'APP_PLATFORMIO_ENV="cardputer-adv-launcher-ota"' apps/claude-buddy/app.env
+! grep -R -nE 'flash_cardputer_adv|erase_cardputer_adv|write_flash' \
+  cardputer tools/cardputer docs/development.md README.md
+
 source tools/cardputer/common.sh
 load_contract
 [[ "$LAUNCHER_OTA_SIZE" == "0x4F0000" ]]
@@ -18,7 +23,7 @@ load_app rfid2
 load_app claude-buddy
 [[ "$APP_ID" == "claude-buddy" ]]
 [[ "$APP_TITLE" == "Claude Desktop Buddy" ]]
-[[ "$APP_VERSION" == "1.3.0" ]]
+[[ "$APP_VERSION" == "1.4.0" ]]
 [[ "$APP_PLATFORMIO_ENV" == "cardputer-adv-launcher-ota" ]]
 [[ "$APP_FIRMWARE_REL" == ".pio/build/cardputer-adv-launcher-ota/firmware.bin" ]]
 [[ "$APP_ARTIFACT_PREFIX" == "Claude-Desktop-Buddy" ]]

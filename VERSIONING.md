@@ -13,9 +13,10 @@ records the recovered pre-Launcher source and observed historical image hash;
 it is not a Launcher release and must never be staged, installed, or flashed.
 See [`docs/history/claude-buddy-v1.3.0.md`](docs/history/claude-buddy-v1.3.0.md).
 
-`claude-buddy-v1.4.0` is the first Launcher release. Create that tag only after
-the Launcher-installed physical smoke test succeeds; migration metadata that
-still reads `1.3.0` does not make the historical image Launcher-installable.
+Claude Buddy app and package provenance now use version `1.4.0`.
+`claude-buddy-v1.4.0` will identify the first Launcher release. Create that tag
+only after the Launcher-installed physical smoke test succeeds. Version
+metadata does not make the historical v1.3.0 image Launcher-installable.
 
 ## New releases
 

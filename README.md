@@ -11,8 +11,9 @@ Formerly `cardputer-rfid2-fw`; RFID2 release history remains intact.
 - `apps/claude-buddy` — Claude Desktop Buddy BLE companion device.
 
 `claude-buddy-v1.3.0` preserves historical raw-source provenance and predates
-Launcher OTA. It is not a Launcher release. `claude-buddy-v1.4.0` is the first
-Launcher release, created only after physical Launcher-installed proof.
+Launcher OTA. It is not a Launcher release. Current Claude Buddy package
+metadata is `1.4.0`; create `claude-buddy-v1.4.0` as the first Launcher release
+tag only after physical Launcher-installed proof.
 
 ## Quick start
 

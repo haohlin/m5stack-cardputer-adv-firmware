@@ -43,6 +43,11 @@ USB MSC, then select the staged image under `tools/` and choose **Install**.
 Launcher stays installed and writes the raw app image through OTA. Full-flash
 tools are isolated under `scripts/recovery/` and are never the normal path.
 
+Current Launcher package metadata is `1.4.0`. The historical
+`claude-buddy-v1.3.0` tag remains immutable and is not installable through
+Launcher. Create `claude-buddy-v1.4.0` only after physical Launcher-installed
+proof succeeds.
+
 For repeatable debugging, use [`docs/debugging.md`](docs/debugging.md). The
 recommended flow is: verify the Launcher-installed firmware over USB serial, provision
 bridge config with `scripts/write_bridge_config_serial.sh`, then test BLE and
@@ -92,7 +97,8 @@ Original M5StickC Plus source and build environment remain preserved in the immu
 
 ## Build and install
 
-Normal firmware is a raw Launcher-compatible app image. From collection root:
+Normal v1.4.0 firmware is a raw Launcher-compatible app image. From collection
+root:
 
 ```bash
 ./cardputer build claude-buddy

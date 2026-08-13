@@ -3,6 +3,9 @@
 Claude Buddy uses the collection root entrypoint and Launcher OTA contract.
 Run all firmware commands from the collection repository root.
 
+Current raw app provenance version is `1.4.0`. The matching release tag remains
+blocked until Launcher installation and physical-device smoke testing pass.
+
 The app-local wrapper uses a local `.venv` PlatformIO install when a global
 `pio` is unavailable. Set `PYTHON_BIN=/path/to/python3.12` to select a Python
 interpreter.
@@ -26,7 +29,7 @@ apps/claude-buddy/.pio/build/cardputer-adv-launcher-ota/firmware.bin
 ```
 
 Release validates the ESP application header and Launcher size limit, then
-writes a versioned raw image and provenance manifest under
+writes a v1.4.0 raw image and provenance manifest under
 `dist/claude-buddy/`.
 
 ## Install through Launcher

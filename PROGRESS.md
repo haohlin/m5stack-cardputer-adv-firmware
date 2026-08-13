@@ -11,6 +11,8 @@
 - Global Codex skill added for this firmware collection.
 - Claude Buddy v1.3.0 recovered and tagged as historical raw-source provenance;
   it remains outside the Launcher release line.
+- Claude Buddy app and raw Launcher OTA package provenance advanced to v1.4.0;
+  its release tag remains blocked on physical Launcher-installed proof.
 - Current Buddy build, install, and debug documentation exposes Launcher-only
   normal workflow; direct flash and erase remain recovery-only.
 - Claude Buddy BLE, character transfer/parser, transfer failure cleanup, status
@@ -30,6 +32,6 @@
 ## Pending hardware proof
 
 - Install the current RFID2 artifact through Launcher on physical Cardputer ADV.
-- Prepare and package Claude Buddy v1.4.0, then install it through Launcher.
+- Install Claude Buddy v1.4.0 through Launcher on physical Cardputer ADV.
 - RFID2: boot/version/status, RFID2 I2C detection, read-only card scan.
 - Claude Buddy: boot, USB serial, BLE advertising/pairing, permission prompt.

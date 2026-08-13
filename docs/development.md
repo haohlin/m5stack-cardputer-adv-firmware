@@ -53,5 +53,6 @@ before staging apps.
 Read [`../VERSIONING.md`](../VERSIONING.md) before release. New tags are
 app-namespaced: `rfid2-vX.Y.Z` and `claude-buddy-vX.Y.Z`.
 `claude-buddy-v1.3.0` is historical raw-source provenance, not a Launcher
-release. `claude-buddy-v1.4.0` is the first Launcher release and requires
-physical Launcher-installed proof before tagging.
+release. Claude Buddy package metadata is now `1.4.0`.
+`claude-buddy-v1.4.0` will be the first Launcher release tag and requires
+physical Launcher-installed proof before creation.

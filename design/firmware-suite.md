@@ -34,9 +34,10 @@ outside normal app OTA path.
   baseline and historical image provenance. Floating legacy dependencies mean
   a successful clean rebuild may have a different SHA-256.
 - The historical tag is never staged, installed, or direct-flashed.
-- `claude-buddy-v1.4.0` is the first Launcher release. Current normal build,
-  package, install, and debug routes use root `./cardputer` plus Launcher OTA;
-  create the tag only after physical Launcher-installed proof.
+- Claude Buddy app and raw OTA package provenance use version `1.4.0`. Current
+  normal build, package, install, and debug routes use root `./cardputer` plus
+  Launcher OTA. `claude-buddy-v1.4.0` becomes the first Launcher release tag
+  only after physical Launcher-installed proof.
 
 ## Claude Buddy security decisions
 
