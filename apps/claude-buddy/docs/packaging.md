@@ -3,27 +3,28 @@
 The release process keeps firmware, bridge, and plugin artifacts reproducible
 from a clean checkout.
 
-## Build Firmware
+## Build and release firmware
 
 ```bash
-./scripts/build_cardputer_adv.sh
+./cardputer build claude-buddy
+./cardputer release claude-buddy
 ```
 
-The merged firmware image is written to:
+Run these commands from collection root. Versioned raw app images and provenance
+manifests are written under:
 
 ```text
-release/cardputer-adv-merged.bin
+dist/claude-buddy/
 ```
 
-Refresh the current experimental archive alias:
+Normal installation uses Launcher USB MSC and Launcher OTA:
 
 ```bash
-./scripts/archive_cardputer_adv_fw.sh experimental
+./cardputer stage claude-buddy
 ```
 
-`release/archive/` intentionally keeps only two firmware aliases:
-`cardputer-adv-stable-latest.bin` for the latest committed/pushed firmware and
-`cardputer-adv-experimental-latest.bin` for the current working tree build.
+Full-flash image packaging is recovery-only and isolated under
+`scripts/recovery/`.
 
 ## Build Desktop Bridge
 
@@ -74,30 +75,9 @@ claude --plugin-dir ./claude-plugin
 When installed, hooks call the local bridge at
 `http://127.0.0.1:17877` unless `CARDPUTER_BRIDGE_URL` is set.
 
-## Package Everything
-
-```bash
-./scripts/package_release.sh
-```
-
-The script builds firmware and bridge outputs, packages the plugin, writes
-checksums, and creates `release/dist/MANIFEST.json`.
-
-Expected release artifacts:
-
-```text
-release/dist/cardputer-adv-stable.bin
-release/dist/cardputer-adv-experimental.bin
-release/dist/claude-cardputer-bridge.mcpb
-release/dist/claude-cardputer-plugin.zip
-release/dist/README.md
-release/dist/DEBUGGING.md
-release/dist/checksums.txt
-release/dist/MANIFEST.json
-```
-
-`README.md` and `DEBUGGING.md` are included so release downloads can be used
-without opening the source tree.
+Package desktop bridge and Claude plugin separately from firmware. Firmware
+release remains root `./cardputer release claude-buddy`; do not bundle a merged
+full-flash image into the normal Launcher artifact flow.
 
 ## Graphify
 

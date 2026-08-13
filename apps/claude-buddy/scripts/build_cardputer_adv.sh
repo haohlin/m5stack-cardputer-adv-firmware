@@ -4,13 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-ENV_NAME="${CARDPUTER_ADV_ENV:-cardputer-adv-launcher-ota}"
-case "$ENV_NAME" in
-  cardputer-adv-launcher-ota|cardputer-adv) ;;
-  *)
-    printf 'Unsupported CARDPUTER_ADV_ENV: %s\n' "$ENV_NAME" >&2
-    exit 2
-    ;;
-esac
+if [[ -n "${CARDPUTER_ADV_ENV:-}" ]]; then
+  printf 'CARDPUTER_ADV_ENV is not supported; normal builds always use cardputer-adv-launcher-ota.\n' >&2
+  exit 2
+fi
 
-exec ./scripts/pio_local.sh run -e "$ENV_NAME" "$@"
+exec ./scripts/pio_local.sh run -e cardputer-adv-launcher-ota "$@"

@@ -57,6 +57,9 @@ Official flashing/download-mode notes:
 
 ## Community Guidance
 
+This section records pre-collection research. Its merged-image conclusions are
+superseded by the collection's Launcher USB MSC and Launcher OTA contract.
+
 Community writeups point to the same practical path:
 
 - Use PlatformIO + Arduino + M5Cardputer/M5Unified for custom firmware.
@@ -73,7 +76,8 @@ The project uses:
 - The Cardputer-Adv community fork as the starting hardware port.
 - M5Stack's official `M5Cardputer` and `M5Unified` libraries instead of custom display, keyboard, IMU, or audio drivers.
 - PlatformIO as the build system, because it is used by the official Anthropic repo, M5Stack docs, and most community firmware examples.
-- A generated merged binary for M5Burner/esptool, using the existing `scripts/merge_bin.py` hook.
+- A generated merged binary for M5Burner/esptool, using the historical hook now
+  preserved at `scripts/recovery/merge_bin.py`.
 - A narrow Cardputer-Adv keyboard reader shim that still uses M5Stack's bundled `Adafruit_TCA8418` driver, but explicitly binds it to GPIO8/GPIO9 and polls the FIFO so missed GPIO11 interrupt edges do not leave the UI appearing frozen.
 - A device-derived static six-digit BLE PIN in secure mode. The pairing UI is only shown during an active pairing request.
 - Non-blocking Serial protocol writes and bounded BLE receive draining, so Claude Desktop traffic cannot starve the Cardputer keyboard scan loop after pairing.

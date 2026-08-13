@@ -5,12 +5,8 @@ be written at offset 0x0. This is the format M5Burner's "Open Custom
 Firmware" accepts, and the same one-file-one-offset input esptool.py
 write_flash wants.
 
-Hooked in via:
-
-    extra_scripts = post:scripts/merge_bin.py
-
-in platformio.ini. Output lands in `release/<env>-merged.bin` so it's
-easy to upload to a GitHub Release as an asset.
+Preserved under scripts/recovery for historical full-flash recovery tooling.
+Normal Launcher OTA builds do not load this hook.
 """
 
 Import("env")  # noqa: F821

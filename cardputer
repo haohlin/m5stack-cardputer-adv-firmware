@@ -18,7 +18,7 @@ Usage:
   ./cardputer debug claude-buddy <serial|ble> [serial-port]
 
 Normal install: build/package raw app image, copy it to Launcher USB MSC tools/,
-then select it in Launcher and Install. Direct serial flash is recovery-only.
+then select it in Launcher and Install.
 EOF
 }
 

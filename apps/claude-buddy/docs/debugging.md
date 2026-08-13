@@ -176,8 +176,8 @@ or Wi-Fi credentials into issues or chat.
 
 Use this order to avoid chasing symptoms across layers:
 
-1. **Build identity**: flash current experimental and confirm the device boots
-   without serial probing.
+1. **Build identity**: install the current Launcher OTA artifact and confirm the
+   device boots without serial probing.
 2. **USB command path**: only if needed, confirm `status` and `bridge_config`
    acks with `CARDPUTER_DEBUG_SERIAL=1`.
 3. **Stored config**: confirm bridge host/token are saved and Wi-Fi is either
@@ -203,7 +203,8 @@ Check the port:
 ./scripts/select_cardputer_port.sh
 ```
 
-Flash a build that initializes USB serial. Status should include `fw`.
+Install a Launcher OTA build that initializes USB serial. Status should include
+`fw`.
 
 ### `bad host (empty)`
 
@@ -248,8 +249,10 @@ Codex should follow this sequence:
 3. Prefer `rg` for source search.
 4. Verify the device via USB serial before changing BLE logic.
 5. Add or run focused scripts rather than relying on screenshots alone.
-6. Build and, when hardware is connected, flash the exact binary being tested.
-7. Archive only `stable-latest` and `experimental-latest` firmware aliases.
+6. Build and release the exact Launcher OTA image being tested through root
+   `./cardputer`.
+7. Install through Launcher USB MSC and Launcher OTA only when hardware work is
+   explicitly in scope.
 8. Run shell syntax checks, `git diff --check`, and `./scripts/graphify_update.sh`
    after code changes.
 9. Do not commit until the feature is working and explicitly approved.

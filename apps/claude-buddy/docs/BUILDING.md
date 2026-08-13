@@ -1,77 +1,68 @@
-# Building and Flashing
+# Building, Releasing, and Installing
 
-This project builds the Cardputer-Adv firmware with PlatformIO.
+Claude Buddy uses the collection root entrypoint and Launcher OTA contract.
+Run all firmware commands from the collection repository root.
 
-The wrapper uses a local `.venv` PlatformIO install when a global `pio` is
-not available. Set `PYTHON_BIN=/path/to/python3.12` if you want to choose the
-Python interpreter explicitly.
+The app-local wrapper uses a local `.venv` PlatformIO install when a global
+`pio` is unavailable. Set `PYTHON_BIN=/path/to/python3.12` to select a Python
+interpreter.
 
 ## Build
 
 ```bash
-./scripts/build_cardputer_adv.sh
+./cardputer build claude-buddy
 ```
 
-The build creates the normal PlatformIO firmware under `.pio/` and a merged image at:
+The build creates the raw Launcher-compatible application image at:
 
 ```text
-release/cardputer-adv-merged.bin
+apps/claude-buddy/.pio/build/cardputer-adv-launcher-ota/firmware.bin
 ```
 
-That merged binary can be written at flash offset `0x0` and is the file to hand to M5Burner custom firmware.
-
-## Flash
-
-Put the Cardputer-Adv into download mode:
-
-1. Set the side power switch to `OFF`.
-2. Hold `G0`.
-3. Plug in USB-C power/data.
-4. Release `G0`.
-
-Then flash:
+## Release
 
 ```bash
-./scripts/flash_cardputer_adv.sh
+./cardputer release claude-buddy
 ```
 
-The script scans USB serial ports. If exactly one device is present, it uses
-that port. If multiple USB serial ports are present, it prompts you to select
-one.
+Release validates the ESP application header and Launcher size limit, then
+writes a versioned raw image and provenance manifest under
+`dist/claude-buddy/`.
 
-If auto port detection misses the device or you want to bypass the prompt:
+## Install through Launcher
+
+1. Boot Launcher. Hold any key during app boot to return to it.
+2. Open Launcher **Settings → USB MSC**.
+3. Run:
 
 ```bash
-./scripts/flash_cardputer_adv.sh /dev/cu.usbmodemXXXX
+./cardputer stage claude-buddy
 ```
 
-Clean erase before a first install or when switching firmware families:
-
-```bash
-./scripts/erase_cardputer_adv.sh
-./scripts/flash_cardputer_adv.sh
-```
-
-## Flash an Archived Binary
-
-Archived merged images live under `release/archive/`. Flash one directly without
-rebuilding:
-
-```bash
-./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin
-```
-
-The binary flash script uses the same USB serial port detection as the normal
-flash script. Pass a port as the second argument to bypass auto-selection:
-
-```bash
-./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin /dev/cu.usbmodemXXXX
-```
+4. Exit USB MSC, open `tools/`, select the staged Claude Buddy image, and choose
+   **Install**.
+5. Launcher writes the app to `ota_0` and keeps Launcher available.
 
 ## Normal Boot
 
-On Cardputer-Adv builds, the firmware boots straight into the normal Hardware
-Buddy splash and home UI.
+Claude Buddy boots into the Hardware Buddy splash and home UI. Hold any key
+during boot to return to Launcher.
+
+## Debug
+
+```bash
+./cardputer debug claude-buddy serial
+./cardputer debug claude-buddy ble
+```
+
+Serial and BLE proof remain separate. Physical-device validation is also
+separate from a successful local build.
+
+## Recovery boundary
+
+Full-flash tools are isolated under `scripts/recovery/`. They can replace or
+erase Launcher and require explicit recovery approval. They are not used for
+normal build, release, install, or runtime debugging.
 
 ## Pair with Claude
 
@@ -90,21 +81,12 @@ If the passcode prompt still blocks pairing, forget the old `Claude-XXXX`
 device in macOS Bluetooth settings, reboot the Cardputer-Adv, and reconnect
 from the Hardware Buddy picker.
 
-The passcode is derived from the device BLE MAC address. For example, a device
-advertising as `Claude-0E65` uses the BLE MAC suffix ending in `0E65`, which
-derives to `401253`. Older builds that used the base Wi-Fi MAC could show one
-less, such as `401252`.
-
-When flashing archived merged binaries, use:
-
-```bash
-./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-experimental-latest.bin
-```
-
-That script preserves the NVS partition by default so BLE bonds and settings
-survive the reflash. Use `--wipe-nvs` only when you intentionally want a clean
-flash that requires BLE re-pairing.
+Pairing codes come from the firmware pairing screen. Do not infer a code from
+public device identity.
 
 ## Custom Character Packs
 
-Anthropic's folder push protocol is unchanged from upstream. Drag a character folder with `manifest.json` and GIF state files into the Hardware Buddy window. The project auto-formats a fresh LittleFS partition on first boot so GIF packs can be received after a clean flash.
+Anthropic's folder push protocol is unchanged from upstream. Drag a character
+folder with `manifest.json` and GIF state files into the Hardware Buddy window.
+The project auto-formats a fresh LittleFS partition on first boot so GIF packs
+can be received on a fresh filesystem.

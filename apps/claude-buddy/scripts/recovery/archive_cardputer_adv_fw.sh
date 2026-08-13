@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 CHANNEL="${1:-experimental}"
@@ -24,9 +24,11 @@ if [[ "$CHANNEL" == "stable" ]]; then
   fi
 fi
 
-BIN="$ROOT/release/cardputer-adv-merged.bin"
+BIN="${CARDPUTER_RECOVERY_MERGED_BIN:-$ROOT/release/cardputer-adv-merged.bin}"
 if [[ ! -f "$BIN" ]]; then
-  ./scripts/build_cardputer_adv.sh
+  echo "Recovery merged image not found: $BIN" >&2
+  echo "Normal Launcher OTA builds intentionally do not create merged images." >&2
+  exit 1
 fi
 
 ts="$(date +%Y%m%d-%H%M%S)"

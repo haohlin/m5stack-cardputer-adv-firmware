@@ -20,37 +20,31 @@ stable path is still official Hardware Buddy BLE; optional desktop integration
 now lives in [`desktop-bridge/`](desktop-bridge/) and
 [`claude-plugin/`](claude-plugin/).
 
+From the collection repository root, use the Launcher workflow:
+
 ```bash
-# Build Cardputer-Adv firmware and produce release/cardputer-adv-merged.bin
-./scripts/build_cardputer_adv.sh
-
-# Flash to an attached Cardputer-Adv
-./scripts/flash_cardputer_adv.sh
-
-# Erase before a clean flash
-./scripts/erase_cardputer_adv.sh
-
-# Package firmware, MCPB bridge, plugin zip, checksums, and release manifest
-./scripts/package_release.sh
-
-# Refresh latest firmware archive alias
-./scripts/archive_cardputer_adv_fw.sh experimental
+./cardputer build claude-buddy
+./cardputer release claude-buddy
+./cardputer stage claude-buddy
+./cardputer debug claude-buddy serial
+./cardputer debug claude-buddy ble
 
 # Optional Wi-Fi bridge config folder for local physical-device testing
-CARDPUTER_WIFI_SSID="..." CARDPUTER_WIFI_PASS="..." ./scripts/write_bridge_config_folder.sh
+CARDPUTER_WIFI_SSID="..." CARDPUTER_WIFI_PASS="..." \
+  ./apps/claude-buddy/scripts/write_bridge_config_folder.sh
 
 # Preferred bridge config provisioning and debug evidence capture
-./scripts/write_bridge_config_serial.sh
-./scripts/collect_debug_bundle.sh
+./apps/claude-buddy/scripts/write_bridge_config_serial.sh
+./apps/claude-buddy/scripts/collect_debug_bundle.sh
 ```
 
-The flash and erase scripts auto-detect USB serial ports. With one attached
-device they use it directly; with multiple USB serial ports they prompt you to
-choose one. You can still pass a port explicitly, for example
-`./scripts/flash_cardputer_adv.sh /dev/cu.usbmodem1101`.
+For installation, boot Launcher, open **Settings → USB MSC**, run `stage`, exit
+USB MSC, then select the staged image under `tools/` and choose **Install**.
+Launcher stays installed and writes the raw app image through OTA. Full-flash
+tools are isolated under `scripts/recovery/` and are never the normal path.
 
 For repeatable debugging, use [`docs/debugging.md`](docs/debugging.md). The
-recommended flow is: verify the flashed firmware over USB serial, provision
+recommended flow is: verify the Launcher-installed firmware over USB serial, provision
 bridge config with `scripts/write_bridge_config_serial.sh`, then test BLE and
 folder push separately. `scripts/collect_debug_bundle.sh` creates a redacted
 bundle under `release/debug/` with device status, bridge health, firmware
@@ -80,7 +74,7 @@ The device connects to the Claude desktop apps over BLE (developer mode required
 
 ## What changed from upstream
 
-- **HAL shim** ([`src/hal.h`](src/hal.h) + [`src/hal.cpp`](src/hal.cpp)) — wraps every `M5.Axp` / `M5.Beep` / `M5.BtnA` / `M5.BtnB` / `M5.Imu` / `M5.Rtc` call site so both boards build from the same source tree. `platformio.ini` has two envs: `m5stickc-plus` (unchanged upstream build) and `cardputer-adv`.
+- **HAL shim** ([`src/hal.h`](src/hal.h) + [`src/hal.cpp`](src/hal.cpp)) — wraps every `M5.Axp` / `M5.Beep` / `M5.BtnA` / `M5.BtnB` / `M5.Imu` / `M5.Rtc` call site. Current `platformio.ini` exposes only the Cardputer ADV Launcher environment; the immutable v1.3.0 tag preserves the older board environments.
 - **Landscape UI** — sprite is now 240×135, every modal / Claude Session / info / pet panel relayouted for the wider-than-tall canvas. Menus centered, settings compacted to 10 rows at 10 px pitch, session/info/pet pages go full-screen with the pet hidden.
 - **Keyboard input** — a HalKey event queue rising-edge-detects the Cardputer matrix and emits `Approve` / `Deny` / `Back` / `Up` / `Down` / `Left` / `Right` / `Menu` / `Demo`. Enter and `Del`/`` ` `` also swallow their matching BtnA/BtnB release so modal confirms don't double-fire into a home-screen cycle.
 - **Live pet picker** — Menu → **pet** opens a full-size preview with a hint bar at the bottom; step species with `,` / `/` and commit with `Enter`. On commit the pet plays a `P_HEART` one-shot and a 3-note save fanfare.
@@ -94,40 +88,22 @@ The device connects to the Claude desktop apps over BLE (developer mode required
 
 M5Stack **Cardputer ADV** (ESP32-S3 StampS3 + 1.14" 240×135 ST7789 + BMI270 IMU + NS4168 I²S speaker + 56-key QWERTY matrix + WS2812B RGB LED on GPIO 21). The stock Cardputer (no IMU) should boot and run everything except shake/face-down nap.
 
-Original M5StickC Plus firmware path is preserved — the HAL passes through to the native `M5.*` APIs on that board.
+Original M5StickC Plus source and build environment remain preserved in the immutable v1.3.0 tag.
 
-## Flashing
+## Build and install
 
-### Pre-built release (no toolchain)
-
-Grab the latest merged `.bin` from the [**Releases page**](https://github.com/haohlin/claude-desktop-buddy-m5stack-cardputer-adv/releases/latest) and flash it with either:
-
-**M5Burner** — top-right **Open Custom Firmware** → pick `claude-buddy-cardputer-*.bin` → select your USB serial port → baud `921600` → **Burn**.
-
-**esptool** (CLI):
+Normal firmware is a raw Launcher-compatible app image. From collection root:
 
 ```bash
-esptool --chip esp32s3 --port /dev/tty.usbmodem* --baud 921600 \
-  write_flash 0x0 claude-buddy-cardputer-v1.0.0.bin
+./cardputer build claude-buddy
+./cardputer release claude-buddy
+./cardputer stage claude-buddy
 ```
 
-If you're coming from a previously-flashed device, run `esptool --chip esp32s3 erase_flash` first.
-
-### From source
-
-Install [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/), then:
-
-```bash
-# Cardputer ADV:
-pio run -e cardputer-adv -t upload
-
-# Original StickC Plus:
-pio run -e m5stickc-plus -t upload
-```
-
-Every build also drops a merged `release/cardputer-adv-merged.bin` you can hand off to M5Burner.
-
-Wipe a previously-flashed device first with `pio run -e cardputer-adv -t erase`. Factory reset from the device itself: Menu → settings → reset → factory reset → tap twice.
+`stage` requires Launcher **Settings → USB MSC**. After staging, exit USB MSC,
+open `tools/` in Launcher, select the Claude Buddy image, and choose **Install**.
+Hold any key while Claude Buddy boots to return to Launcher. Factory reset from
+the app remains Menu → settings → reset → factory reset → tap twice.
 
 ## Pairing
 

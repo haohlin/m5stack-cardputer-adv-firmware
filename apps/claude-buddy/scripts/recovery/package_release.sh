@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 DIST="$ROOT/release/dist"
 mkdir -p "$DIST"
 
-./scripts/build_cardputer_adv.sh
-./scripts/archive_cardputer_adv_fw.sh experimental >/dev/null
+printf 'RECOVERY ONLY: packaging merged full-flash images; normal firmware release uses root ./cardputer release claude-buddy.\n' >&2
+./scripts/recovery/archive_cardputer_adv_fw.sh experimental >/dev/null
 
 cp "$ROOT/release/archive/cardputer-adv-stable-latest.bin" "$DIST/cardputer-adv-stable.bin"
 cp "$ROOT/release/archive/cardputer-adv-experimental-latest.bin" "$DIST/cardputer-adv-experimental.bin"

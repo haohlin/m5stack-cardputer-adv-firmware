@@ -16,6 +16,58 @@ load_contract
 load_app rfid2
 [[ "$APP_PLATFORMIO_ENV" == "cardputer-adv-rfid2" ]]
 load_app claude-buddy
+[[ "$APP_ID" == "claude-buddy" ]]
+[[ "$APP_TITLE" == "Claude Desktop Buddy" ]]
+[[ "$APP_VERSION" == "1.3.0" ]]
 [[ "$APP_PLATFORMIO_ENV" == "cardputer-adv-launcher-ota" ]]
+[[ "$APP_FIRMWARE_REL" == ".pio/build/cardputer-adv-launcher-ota/firmware.bin" ]]
+[[ "$APP_ARTIFACT_PREFIX" == "Claude-Desktop-Buddy" ]]
+
+buddy_ini="apps/claude-buddy/platformio.ini"
+[[ "$(rg -c '^\[env:' "$buddy_ini")" == "1" ]]
+rg -q '^\[env:cardputer-adv-launcher-ota\]$' "$buddy_ini"
+rg -q '^board_build\.partitions = ../../contracts/launcher/cardputer-adv-8mb\.csv$' "$buddy_ini"
+! rg -q 'no_ota\.csv|^\[env:cardputer-adv\]$|^\[env:m5stickc-plus\]$' "$buddy_ini"
+
+buddy_wrapper="apps/claude-buddy/scripts/build_cardputer_adv.sh"
+rg -Fq 'exec ./scripts/pio_local.sh run -e cardputer-adv-launcher-ota "$@"' "$buddy_wrapper"
+if wrapper_output="$(CARDPUTER_ADV_ENV=cardputer-adv "$buddy_wrapper" 2>&1)"; then
+  echo "Buddy build wrapper accepted forbidden legacy environment override" >&2
+  exit 1
+fi
+[[ "$wrapper_output" == "CARDPUTER_ADV_ENV is not supported; normal builds always use cardputer-adv-launcher-ota." ]]
+
+legacy_ini="$(git show claude-buddy-v1.3.0:apps/claude-buddy/platformio.ini)"
+rg -q '^\[env:cardputer-adv\]$' <<<"$legacy_ini"
+rg -q '^board_build\.partitions = no_ota\.csv$' <<<"$legacy_ini"
+
+for helper in \
+  flash_cardputer_adv.sh \
+  flash_cardputer_adv_bin.sh \
+  erase_cardputer_adv.sh \
+  archive_cardputer_adv_fw.sh \
+  package_release.sh; do
+  if [[ -e "apps/claude-buddy/scripts/$helper" ]]; then
+    echo "Recovery helper remains exposed in normal scripts directory: $helper" >&2
+    exit 1
+  fi
+  if [[ ! -x "apps/claude-buddy/scripts/recovery/$helper" ]]; then
+    echo "Recovery helper is missing or not executable: $helper" >&2
+    exit 1
+  fi
+done
+[[ -f apps/claude-buddy/scripts/recovery/merge_bin.py ]]
+
+normal_docs=(
+  README.md
+  docs/development.md
+  apps/claude-buddy/README.md
+  apps/claude-buddy/apps/README.md
+  apps/claude-buddy/docs/BUILDING.md
+  apps/claude-buddy/docs/debugging.md
+  apps/claude-buddy/docs/packaging.md
+)
+! rg -n '(\./scripts/(flash|erase)[^ ]*|pio run .* -t (upload|erase)|esptool .* (write_flash|erase_flash)|M5Burner)' "${normal_docs[@]}"
+! ./cardputer --help | rg -qi '(flash|erase|scripts/recovery)'
 
 echo "cardputer tool static checks passed"

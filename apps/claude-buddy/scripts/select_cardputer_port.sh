@@ -89,10 +89,10 @@ if [[ ${#ports[@]} -eq 0 ]]; then
   ansi_fail "No USB serial port was found for the Cardputer ADV."
   cat >&2 <<'EOF'
 
-Put the device in download mode, reconnect USB-C, then retry. You can also pass
-the port explicitly:
+Reconnect USB-C, then retry. For normal runtime debugging, pass the port through
+the root interface:
 
-  ./scripts/flash_cardputer_adv.sh /dev/cu.usbmodemXXXX
+  ./cardputer debug claude-buddy serial /dev/cu.usbmodemXXXX
 
 EOF
   exit 1
@@ -107,7 +107,7 @@ if [[ ! -t 0 ]]; then
   ansi_warn "Multiple USB serial ports found, but stdin is not interactive:"
   printf '  %s\n' "${ports[@]}" >&2
   ansi_info "Pass one explicitly, for example:"
-  printf '  ./scripts/flash_cardputer_adv.sh %s\n' "${ports[0]}" >&2
+  printf '  ./cardputer debug claude-buddy serial %s\n' "${ports[0]}" >&2
   exit 1
 fi
 

@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 source "$ROOT/scripts/ansi.sh"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: ./scripts/flash_cardputer_adv_bin.sh [--wipe-nvs] <merged-bin> [serial-port]
+RECOVERY ONLY: writes a merged full-flash image outside Launcher OTA.
+
+Usage: ./scripts/recovery/flash_cardputer_adv_bin.sh [--wipe-nvs] <merged-bin> [serial-port]
 
 Examples:
-  ./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin
-  ./scripts/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-experimental-latest.bin /dev/cu.usbmodem1101
-  ./scripts/flash_cardputer_adv_bin.sh --wipe-nvs release/archive/cardputer-adv-experimental-latest.bin
+  ./scripts/recovery/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-stable-latest.bin
+  ./scripts/recovery/flash_cardputer_adv_bin.sh release/archive/cardputer-adv-experimental-latest.bin /dev/cu.usbmodem1101
+  ./scripts/recovery/flash_cardputer_adv_bin.sh --wipe-nvs release/archive/cardputer-adv-experimental-latest.bin
 
 By default this preserves the NVS partition so BLE bonds, brightness, sound,
 Wi-Fi bridge settings, and pet settings survive reflashing a merged image.
@@ -78,7 +80,7 @@ if [[ -z "$ESPTOOL" ]]; then
 fi
 if [[ -z "$ESPTOOL" ]]; then
   ansi_fail "Could not find PlatformIO esptool.py under ~/.platformio/packages."
-  ansi_info "Run ./scripts/build_cardputer_adv.sh once, then retry."
+  ansi_info "Install PlatformIO through a normal root ./cardputer build claude-buddy first."
   exit 1
 fi
 
@@ -117,6 +119,7 @@ print_footer() {
   printf '====================================================================== %s in %s ======================================================================\n' "$count_line" "$duration"
 }
 
+ansi_warn "RECOVERY ONLY: this may replace Launcher and other flash regions."
 ansi_info "Flashing $BIN"
 ansi_info "Using Cardputer ADV port: $PORT"
 start_seconds="$SECONDS"
