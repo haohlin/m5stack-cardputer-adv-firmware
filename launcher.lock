@@ -1,0 +1,7 @@
+# Launcher stays outside this monorepo. Update only after compatibility review.
+LAUNCHER_REMOTE="git@github.com:TheRealHaoLiu/cardputer-adv-launcher.git"
+LAUNCHER_COMMIT="8b1c816a0cff28fe11d8951f6eeee20bad2acd88"
+LAUNCHER_PARTITION_FILE="contracts/launcher/cardputer-adv-8mb.csv"
+LAUNCHER_SD_TOOLS_DIR="tools"
+LAUNCHER_OTA_OFFSET="0x170000"
+LAUNCHER_OTA_SIZE="0x4F0000"

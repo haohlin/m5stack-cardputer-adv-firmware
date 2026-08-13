@@ -17,3 +17,4 @@ The wrapper installs the `graphifyy` PyPI package into the project `.venv` when
 needed and then runs the `graphify` CLI. This avoids recurring failures when
 `graphify` is not installed globally.
 
+Normal delivery and runtime debugging use root ./cardputer plus Launcher USB MSC and Launcher OTA. scripts/recovery is explicit recovery only.

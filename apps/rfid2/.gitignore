@@ -1,0 +1,6 @@
+.pio/
+.venv/
+.DS_Store
+release/
+__pycache__/
+*.pyc
