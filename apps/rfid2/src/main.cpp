@@ -8,20 +8,21 @@
 #include <math.h>
 #include <set>
 
+#include "security_utils.h"
+
 namespace {
-constexpr char kFwName[] = "cardputer-rfid2-fw";
+constexpr char kFwName[] = "m5stack-cardputer-adv-rfid2";
 // kFwVersion is the human-readable release tag. The boot splash and serial
 // output also read the runtime app description (esp_app_get_description())
 // which is always accurate for the actually-running binary regardless of
 // which OTA slot it was installed to.
-constexpr char kFwVersion[] = "1.5.7";
+constexpr char kFwVersion[] = "1.5.9";
 constexpr uint8_t kRfidI2cAddress = 0x28;
 constexpr int kRfidResetPin = -1;
 constexpr int kGroveSda = 2;
 constexpr int kGroveScl = 1;
 constexpr uint32_t kI2cFrequency = 400000;
 constexpr uint32_t kHeartbeatMs = 3000;
-constexpr uint32_t kWriteArmWindowMs = 120000;  // 2 min safety timeout; no countdown shown
 constexpr size_t kCommandMax = 96;
 constexpr uint8_t kClassic1kBlocks = 64;
 constexpr uint8_t kClassic1kSectors = 16;
@@ -154,8 +155,8 @@ struct StatusCache {
 bool resultScreenActive = false;
 
 // Multi-key dictionary (Bruce-style): std::set<String> of uppercase 12-hex-char
-// keys, auto-deduplicating and unbounded. Seeded in setup(); persists to
-// kKeyFilePath on SD. Identical to Bruce's MifareKeysManager pattern.
+// keys, auto-deduplicating and capped by RFID_MAX_MIFARE_KEYS. Seeded in
+// setup(); persists to kKeyFilePath on SD.
 std::set<String> mifareKeys;
 
 // microSD presence; when false the firmware still runs fully with RAM-only slots.
@@ -256,12 +257,12 @@ String selectedSummary() {
 
 bool isArmedForSelection() {
   return pendingAction != PendingAction::None && armedMode == selectedMode && armedSlot == selectedSlot &&
-         (int32_t)(armedUntilMs - millis()) > 0;
+         rfidArmStillValid(millis(), armedUntilMs);
 }
 
 bool isArmedAction(PendingAction action) {
   return pendingAction == action && armedMode == selectedMode && armedSlot == selectedSlot &&
-         (int32_t)(armedUntilMs - millis()) > 0;
+         rfidArmStillValid(millis(), armedUntilMs);
 }
 
 void cancelArm() {
@@ -726,7 +727,7 @@ void armSelection(PendingAction action) {
   pendingAction = action;
   armedMode = selectedMode;
   armedSlot = selectedSlot;
-  armedUntilMs = millis() + kWriteArmWindowMs;
+  armedUntilMs = rfidWriteArmDeadline(millis());
   _armedCache.dirty = true;  // force full redraw on first drawArmedScreen() call
 }
 
@@ -879,6 +880,8 @@ bool dictAddKey(const String& hexKey) {
   k.toUpperCase();
   k.trim();
   if (!isValidHexKey(k)) return false;
+  if (mifareKeys.find(k) != mifareKeys.end()) return true;
+  if (!rfidKeyCountAllowsInsert(mifareKeys.size())) return false;
   mifareKeys.insert(k);
   return true;
 }
@@ -1046,10 +1049,18 @@ bool loadSlotFromSd(uint8_t slot) {
   if (!SD.exists(path)) return false;
   File f = SD.open(path, FILE_READ);
   if (!f) return false;
+  if (!rfidPersistFileAllowed(f.size(), RFID_MAX_SLOT_FILE_BYTES)) {
+    f.close();
+    return false;
+  }
 
   StoredDump dump;
   while (f.available()) {
     String line = f.readStringUntil('\n');
+    if (!rfidPersistLineAllowed(line.length())) {
+      f.close();
+      return false;
+    }
     line.trim();
     if (!line.length()) continue;
     const int sp = line.indexOf(' ');
@@ -1138,12 +1149,23 @@ bool loadKeysFromSd() {
   if (!sdReady || !SD.exists(kKeyFilePath)) return false;
   File f = SD.open(kKeyFilePath, FILE_READ);
   if (!f) return false;
+  if (!rfidPersistFileAllowed(f.size(), RFID_MAX_KEY_FILE_BYTES)) {
+    f.close();
+    return false;
+  }
   while (f.available()) {
     String line = f.readStringUntil('\n');
+    if (!rfidPersistLineAllowed(line.length())) {
+      f.close();
+      return false;
+    }
     line.trim();
     if (line.length() == 0 || line.startsWith("//")) continue;
     line.toUpperCase();
-    if (isValidHexKey(line)) mifareKeys.insert(line);
+    if (isValidHexKey(line) && !dictAddKey(line)) {
+      f.close();
+      return false;
+    }
   }
   f.close();
   return true;
@@ -1162,8 +1184,16 @@ void loadConfigFromSd() {
   if (!sdReady || !SD.exists("/rfid/config.txt")) return;
   File f = SD.open("/rfid/config.txt", FILE_READ);
   if (!f) return;
+  if (!rfidPersistFileAllowed(f.size(), RFID_MAX_SLOT_FILE_BYTES)) {
+    f.close();
+    return;
+  }
   while (f.available()) {
     String line = f.readStringUntil('\n');
+    if (!rfidPersistLineAllowed(line.length())) {
+      f.close();
+      return;
+    }
     line.trim();
     const int sp = line.indexOf(' ');
     if (sp < 0) continue;
@@ -1854,8 +1884,8 @@ void writeLiteralDataBlock(const String& command) {
   const int firstSpace = command.indexOf(' ');
   const int secondSpace = firstSpace < 0 ? -1 : command.indexOf(' ', firstSpace + 1);
   if (firstSpace < 0 || secondSpace < 0) {
-    emitMessage("error", "usage: write-block <block 1-62 non-trailer> <32 hex chars>");
-    drawLines("write-block usage", "write-block <block>", "<32 hex chars>");
+    emitMessage("error", "usage: write-block <block 1-62 non-trailer> <32 hex chars> confirm");
+    drawLines("write-block usage", "write-block <block>", "<32 hex> confirm");
     return;
   }
 
@@ -2064,7 +2094,7 @@ void handleKeyboardUi() {
     return;
   }
 
-  if (pendingAction != PendingAction::None && (int32_t)(armedUntilMs - millis()) <= 0) {
+  if (pendingAction != PendingAction::None && !rfidArmStillValid(millis(), armedUntilMs)) {
     cancelArm();
     drawHome("Arm expired");
   }
@@ -2321,7 +2351,13 @@ void processCommand(String command) {
       writeStoredDumpToPresentClassic1k((uint8_t)parsedSlot);
     }
   } else if (command.startsWith("write-block ")) {
-    writeLiteralDataBlock(command);
+    const size_t confirmedLength = rfidConfirmedCommandLength(command.c_str());
+    if (!confirmedLength) {
+      emitMessage("error", "write-block requires explicit confirm");
+      drawLines("Write blocked", "Serial needs confirm", "write-block ... confirm");
+    } else {
+      writeLiteralDataBlock(command.substring(0, confirmedLength));
+    }
   } else if (command == "clone" || command.startsWith("clone ")) {
     bool confirmed = false;
     const int parsedSlot = parseOptionalSlot(commandTail(command, "clone"), confirmed);
@@ -2399,7 +2435,7 @@ void processCommand(String command) {
   } else if (command == "version") {
     emitMessage("version", String(kFwName) + " " + runningVersion());
   } else if (command == "help") {
-    emitMessage("help", "commands: status, slots, next, ui, mode read|write|clone, slot <1-4>, scan, store [slot] [confirm], dump [slot], write [slot] confirm, clone [slot] confirm, write-block <block> <32hex>, keys, key add <12hex>, key clear, key reset, trailers on|off, sd, clear [slot]|all confirm, reset-rfid, version, help");
+    emitMessage("help", "commands: status, slots, next, ui, mode read|write|clone, slot <1-4>, scan, store [slot] [confirm], dump [slot], write [slot] confirm, clone [slot] confirm, write-block <block> <32hex> confirm, keys, key add <12hex>, key clear, key reset, trailers on|off, sd, clear [slot]|all confirm, reset-rfid, version, help");
   } else {
     emitMessage("error", "unknown command: " + command);
   }

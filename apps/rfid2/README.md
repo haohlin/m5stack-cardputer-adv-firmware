@@ -1,5 +1,8 @@
 # Cardputer-Adv RFID2 Firmware
 
+Part of [M5Stack Cardputer ADV Firmware](../../README.md). This app keeps its
+own source, dependencies, release version, and RFID2-focused history.
+
 Standalone firmware for using the M5Stack Unit RFID2 on the Cardputer-Adv Grove
 port with owned MIFARE Classic 1K lab cards.
 
@@ -101,7 +104,7 @@ Expected limitations:
 - UID / block 0 is only rewritten on **magic / UID-changeable** cards.
 - Sector trailers (keys + access bits) are written only with `trailers on`.
 - Same-card data-block rewrites are also available via the `write-block` serial
-  command.
+  command, with an exact trailing `confirm` token.
 
 ## Cloning & access control — what actually transfers
 
@@ -173,7 +176,7 @@ The firmware also accepts these USB serial commands at 115200 baud:
 - `dump [slot]`
 - `write [slot] confirm`
 - `clone [slot] confirm`
-- `write-block <block> <32hex>`
+- `write-block <block> <32hex> confirm`
 - `keys` / `key add <12hex>` / `key clear` / `key reset`
 - `trailers on|off`
 - `sd`
@@ -198,11 +201,12 @@ Serial write also requires explicit confirmation:
 To rewrite a normal data block on the card currently held on RFID2:
 
 ```sh
-./scripts/send_command.sh "write-block 4 00112233445566778899AABBCCDDEEFF" /dev/cu.usbmodem2101
+./scripts/send_command.sh "write-block 4 00112233445566778899AABBCCDDEEFF confirm" /dev/cu.usbmodem2101
 ```
 
 `write-block` accepts separators in the hex string, but it still requires
-exactly 16 bytes. It refuses block 0 and sector trailers.
+exactly 16 bytes and an exact trailing `confirm` token. It refuses block 0 and
+sector trailers.
 
 ## JTAG Runtime Status
 
