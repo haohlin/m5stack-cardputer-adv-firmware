@@ -67,6 +67,19 @@ class ClaudeBuddySecurityTests(unittest.TestCase):
             )
             subprocess.run([str(binary)], check=True)
 
+    def test_host_bridge_token_helper_matches_firmware_contract(self):
+        helper = load_module("bridge_token", BUDDY / "scripts" / "bridge_token.py")
+        self.assertTrue(helper.bridge_token_allowed("Az09_-bcDE12fgHI34jkLM56noPQ78rs"))
+        self.assertFalse(helper.bridge_token_allowed("a" * 24))
+        self.assertFalse(helper.bridge_token_allowed("a" * 32))
+        self.assertFalse(helper.bridge_token_allowed("Az09_-bcDE12fgHI34jkLM56noPQ78r+"))
+        serial = (BUDDY / "scripts" / "write_bridge_config_serial.sh").read_text()
+        folder = (BUDDY / "scripts" / "write_bridge_config_folder.sh").read_text()
+        header = (BUDDY / "scripts" / "write_bridge_config_header.sh").read_text()
+        self.assertIn("bridge_token_allowed(token)", serial)
+        self.assertIn('bridge_token.py"', folder)
+        self.assertIn('bridge_token.py"', header)
+
     def test_prep_rejects_manifest_name_outside_output_root(self):
         prep = load_module("prep_character", BUDDY / "tools" / "prep_character.py")
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,7 +218,13 @@ class ClaudeBuddySecurityTests(unittest.TestCase):
     def test_bridge_config_is_not_logged_or_exposed_in_status(self):
         config = (BUDDY / "src" / "bridge_config.cpp").read_text()
         bundle = (BUDDY / "scripts" / "collect_debug_bundle.sh").read_text()
-        self.assertIn('prefs.putString("br_tok", cfg.token);', config)
+        self.assertIn('prefs.putBytes(kBridgeRecordKey, &record, sizeof(record))', config)
+        self.assertIn('prefs.getBytesLength(kBridgeRecordKey)', config)
+        self.assertIn('stored == sizeof(record)', config)
+        self.assertNotIn('prefs.putString("br_', config)
+        self.assertNotIn('prefs.getString("br_', config)
+        self.assertNotIn('prefs.putBool("br_valid"', config)
+        self.assertNotIn('prefs.getBool("br_valid"', config)
         self.assertIn('out[key] = "<redacted>"', bundle)
         self.assertNotIn('print(cfg.token)', config)
 

@@ -317,7 +317,7 @@ inline bool bridgeConfigSaveFromFile(const char* path, char* error, size_t error
   const std::string contents = LittleFS.readText(path ? path : "");
   const bool valid = !contents.empty() && contents.front() == '{' && contents.back() == '}' &&
                      contents.find("\"endpoint\":\"wss://") != std::string::npos &&
-                     contents.find("\"token\":\"012345678901234567890123\"") != std::string::npos &&
+                     contents.find("\"token\":\"Az09_-bcDE12fgHI34jkLM56noPQ78rs\"") != std::string::npos &&
                      contents.find("-----BEGIN CERTIFICATE-----") != std::string::npos &&
                      contents.find("-----END CERTIFICATE-----") != std::string::npos;
   fakeBridgeConfigSaved = valid;

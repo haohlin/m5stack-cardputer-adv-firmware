@@ -42,7 +42,7 @@ esptool is **only** used to restore the launcher if it is ever wiped:
 `0x0 /tmp/launcher-bins/Launcher-m5stack-cardputer.bin`
 - Serial command surface (115200): `status slots next ui mode read|write|clone
   slot <1-4> scan store [slot] [confirm] dump [slot] write [slot] confirm
-  clone [slot] confirm write-block <block> <32hex> confirm keys key add|clear|reset
+  clone [slot] confirm write-block <block> <32hex> confirm (always rejected) keys key add|clear|reset
   trailers on|off sd clear [slot]|all confirm reset-rfid version help`.
 
 ## Architecture (the parts that span files / aren't obvious)
@@ -101,7 +101,9 @@ esptool is **only** used to restore the launcher if it is ever wiped:
 - After editing code, the workspace asks to run `graphify update .` (AST-only) —
   it is often unavailable in-shell; note it rather than failing.
 - Destructive RF ops (write/clone) are intentionally double-confirmed (arm →
-  confirm within 8 s on device; `confirm` keyword over serial). Keep those guards.
+  confirm within 8 s on device; `confirm` keyword over serial). Serial execution
+  also reselects and matches the first card UID seen for that arm. Keep those
+  guards; `write-block` stays serial-disabled.
 - Bump `kFwVersion` in `src/main.cpp` for any behavioral change; it's reported by
   `version`/`status` and used to confirm the running build.
 

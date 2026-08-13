@@ -79,8 +79,8 @@ else
   PASS="${CARDPUTER_WIFI_PASS:-}"
 fi
 
-if [[ ${#TOKEN} -lt 24 ]]; then
-  echo "No bridge token found. Start or print the bridge config first." >&2
+if ! printf '%s' "$TOKEN" | python3 "$ROOT/scripts/bridge_token.py"; then
+  echo "Bridge token must be 32 URL-safe characters provisioned from a CSPRNG." >&2
   exit 1
 fi
 if [[ -z "$CA_FILE" || ! -f "$CA_FILE" ]]; then

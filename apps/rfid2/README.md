@@ -12,9 +12,12 @@ storage and key-management design before placing cards, dumps, or keys on
 untrusted removable media.
 
 Serial `write` and `clone` require exact `confirm` plus matching physical UI
-arm, target slot, and present card within eight seconds. `write-block` is
-serial-disabled because arbitrary literal payload cannot be bound to existing UI
-arm; use physical full-slot write workflow instead.
+arm, target slot, and present card within eight seconds. The first destination
+card identity seen for the arm is retained until cancel/expiry; serial execution
+reselects and rejects a swapped card. Physical UI can still arm before a card is
+presented and remains the normal confirmation path. `write-block` is
+serial-disabled because arbitrary literal payload cannot be bound to an existing
+UI arm; use physical full-slot write workflow instead.
 
 Standalone firmware for using the M5Stack Unit RFID2 on the Cardputer-Adv Grove
 port with owned MIFARE Classic 1K lab cards.
@@ -116,8 +119,7 @@ Expected limitations:
   any keys you add). Unknown keys cannot be recovered.
 - UID / block 0 is only rewritten on **magic / UID-changeable** cards.
 - Sector trailers (keys + access bits) are written only with `trailers on`.
-- Same-card data-block rewrites are also available via the `write-block` serial
-  command, with an exact trailing `confirm` token.
+- Serial `write-block` remains rejected; use the physical full-slot write flow.
 
 ## Cloning & access control — what actually transfers
 
@@ -189,7 +191,8 @@ The firmware also accepts these USB serial commands at 115200 baud:
 - `dump [slot]`
 - `write [slot] confirm`
 - `clone [slot] confirm`
-- `write-block <block> <32hex> confirm`
+- `write-block <block> <32hex> confirm` (rejected; physical UI has no matching
+  literal-payload arm)
 - `keys` / `key add <12hex>` / `key clear` / `key reset`
 - `trailers on|off`
 - `sd`
@@ -211,15 +214,15 @@ Serial write also requires explicit confirmation:
 ./scripts/send_command.sh "write 1 confirm" /dev/cu.usbmodem2101
 ```
 
-To rewrite a normal data block on the card currently held on RFID2:
+Literal block writes remain disabled even with exact confirmation:
 
 ```sh
 ./scripts/send_command.sh "write-block 4 00112233445566778899AABBCCDDEEFF confirm" /dev/cu.usbmodem2101
 ```
 
-`write-block` accepts separators in the hex string, but it still requires
-exactly 16 bytes and an exact trailing `confirm` token. It refuses block 0 and
-sector trailers.
+Firmware rejects `write-block` and directs the operator to physical full-slot
+write. This preserves the physical arm boundary for all serial destructive
+operations.
 
 ## JTAG Runtime Status
 

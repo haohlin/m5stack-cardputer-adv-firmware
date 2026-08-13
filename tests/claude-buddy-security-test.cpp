@@ -2,7 +2,14 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "bridge_config_storage.h"
 #include "security_utils.h"
+
+struct BridgeRecordFixture {
+  char endpoint[48];
+  char token[33];
+  char ca[80];
+};
 
 int main() {
   using AppendPathInterface = bool (*)(char (*)[32], uint8_t&, const char*);
@@ -49,5 +56,31 @@ int main() {
   assert(buddyPairingPasskey(0) == 100000);
   assert(buddyPairingPasskey(UINT32_MAX) >= 100000);
   assert(buddyPairingPasskey(UINT32_MAX) <= 999999);
+
+  assert(buddyBridgeTokenAllowed("Az09_-bcDE12fgHI34jkLM56noPQ78rs"));
+  assert(!buddyBridgeTokenAllowed("aaaaaaaaaaaaaaaaaaaaaaaa"));
+  assert(!buddyBridgeTokenAllowed("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+  assert(!buddyBridgeTokenAllowed("Az09_-bcDE12fgHI34jkLM56noPQ78r+"));
+
+  BridgeRecordFixture config = {};
+  strcpy(config.endpoint, "wss://bridge.example/device");
+  strcpy(config.token, "Az09_-bcDE12fgHI34jkLM56noPQ78rs");
+  strcpy(config.ca, "-----BEGIN CERTIFICATE-----public-----END CERTIFICATE-----");
+  auto record = buddyBridgeConfigRecordMake(config);
+  BridgeRecordFixture loaded = {};
+  assert(buddyBridgeConfigRecordExtract(record, &loaded));
+  assert(strcmp(loaded.endpoint, config.endpoint) == 0);
+  assert(strcmp(loaded.token, config.token) == 0);
+  assert(strcmp(loaded.ca, config.ca) == 0);
+
+  auto mixedToken = record;
+  mixedToken.config.token[0] ^= 1;
+  assert(!buddyBridgeConfigRecordExtract(mixedToken, &loaded));
+  auto mixedCa = record;
+  mixedCa.config.ca[10] ^= 1;
+  assert(!buddyBridgeConfigRecordExtract(mixedCa, &loaded));
+  auto malformed = record;
+  malformed.payloadSize--;
+  assert(!buddyBridgeConfigRecordExtract(malformed, &loaded));
   return 0;
 }

@@ -1,4 +1,6 @@
 #include "bridge_config.h"
+#include "bridge_config_storage.h"
+#include "security_utils.h"
 
 #include <ArduinoJson.h>
 #include <LittleFS.h>
@@ -7,6 +9,8 @@
 namespace {
 BridgeStoredConfig _cfg = {};
 uint32_t _cfgVersion = 1;
+constexpr char kBridgeRecordKey[] = "br_cfg";
+using BridgeRecord = BuddyBridgeConfigRecord<BridgeStoredConfig>;
 
 void bump() {
   _cfgVersion++;
@@ -74,8 +78,7 @@ bool validate(const BridgeStoredConfig& cfg, char* error, size_t errorLen) {
   if (!cfg.ssid[0]) return fail("missing ssid");
   if (hasBadHostChars(cfg.host)) return fail("bad host");
   if (cfg.port == 0) return fail("bad port");
-  if (strlen(cfg.token) < 24) return fail("weak token");
-  if (strstr(cfg.token, "paste-token") || cfg.token[0] == '<') return fail("bad token");
+  if (!buddyBridgeTokenAllowed(cfg.token)) return fail("weak token");
   if (!strstr(cfg.ca, "-----BEGIN CERTIFICATE-----") ||
       !strstr(cfg.ca, "-----END CERTIFICATE-----")) return fail("missing ca");
   return true;
@@ -93,27 +96,36 @@ bool validateBridgeIdentity(const BridgeStoredConfig& cfg, char* error, size_t e
     return false;
   }
   if (cfg.port == 0) return fail("bad port");
-  if (strlen(cfg.token) < 24) return fail("weak token");
-  if (strstr(cfg.token, "paste-token") || cfg.token[0] == '<') return fail("bad token");
+  if (!buddyBridgeTokenAllowed(cfg.token)) return fail("weak token");
   if (!strstr(cfg.ca, "-----BEGIN CERTIFICATE-----") ||
       !strstr(cfg.ca, "-----END CERTIFICATE-----")) return fail("missing ca");
   return true;
 }
 
-void persist(const BridgeStoredConfig& cfg) {
+void removeLegacyBridgeKeys(Preferences& prefs) {
+  prefs.remove("br_ssid");
+  prefs.remove("br_pass");
+  prefs.remove("br_host");
+  prefs.remove("br_port");
+  prefs.remove("br_tok");
+  prefs.remove("br_ca");
+  prefs.remove("br_valid");
+}
+
+bool persist(const BridgeStoredConfig& cfg) {
+  const BridgeRecord record = buddyBridgeConfigRecordMake(cfg);
   Preferences prefs;
-  prefs.begin("buddy", false);
-  prefs.putString("br_ssid", cfg.ssid);
-  prefs.putString("br_pass", cfg.pass);
-  prefs.putString("br_host", cfg.host);
-  prefs.putUShort("br_port", cfg.port);
-  prefs.putString("br_tok", cfg.token);
-  prefs.putString("br_ca", cfg.ca);
-  prefs.putBool("br_valid", cfg.valid);
+  if (!prefs.begin("buddy", false)) return false;
+  const size_t stored = prefs.putBytes(kBridgeRecordKey, &record, sizeof(record));
+  const bool committed = stored == sizeof(record);
+  if (committed) removeLegacyBridgeKeys(prefs);
   prefs.end();
+
+  if (!committed) return false;
 
   _cfg = cfg;
   bump();
+  return true;
 }
 
 }  // namespace
@@ -122,18 +134,21 @@ void bridgeConfigLoad() {
   Preferences prefs;
   memset(&_cfg, 0, sizeof(_cfg));
   _cfg.port = 17878;
-  prefs.begin("buddy", true);
-  prefs.getString("br_ssid", _cfg.ssid, sizeof(_cfg.ssid));
-  prefs.getString("br_pass", _cfg.pass, sizeof(_cfg.pass));
-  prefs.getString("br_host", _cfg.host, sizeof(_cfg.host));
-  prefs.getString("br_tok", _cfg.token, sizeof(_cfg.token));
-  prefs.getString("br_ca", _cfg.ca, sizeof(_cfg.ca));
-  _cfg.port = prefs.getUShort("br_port", 17878);
-  _cfg.valid = prefs.getBool("br_valid", false);
-  prefs.end();
+  BridgeRecord record = {};
+  size_t loaded = 0;
+  if (prefs.begin("buddy", true)) {
+    if (prefs.getBytesLength(kBridgeRecordKey) == sizeof(record)) {
+      loaded = prefs.getBytes(kBridgeRecordKey, &record, sizeof(record));
+    }
+    prefs.end();
+  }
 
-  char error[32];
-  if (_cfg.valid && !validate(_cfg, error, sizeof(error))) _cfg.valid = false;
+  BridgeStoredConfig candidate = {};
+  if (loaded == sizeof(record) && buddyBridgeConfigRecordExtract(record, &candidate)) {
+    char error[32];
+    candidate.valid = validate(candidate, error, sizeof(error));
+    _cfg = candidate;
+  }
   bump();
 }
 
@@ -147,8 +162,7 @@ bool bridgeConfigSave(const BridgeStoredConfig& cfg) {
   next.valid = validate(next, error, sizeof(error));
   if (!next.valid) return false;
 
-  persist(next);
-  return true;
+  return persist(next);
 }
 
 bool bridgeConfigSaveJson(JsonDocument& doc, char* error, size_t errorLen) {
@@ -188,7 +202,7 @@ bool bridgeConfigSaveJson(JsonDocument& doc, char* error, size_t errorLen) {
   if (!validateBridgeIdentity(next, error, errorLen)) return false;
   char readyError[32];
   next.valid = validate(next, readyError, sizeof(readyError));
-  persist(next);
+  if (!persist(next)) return fail("NVS write failed");
   return true;
 }
 
@@ -223,21 +237,21 @@ bool bridgeConfigSaveWifi(const char* ssid, const char* pass, char* error, size_
 
   char readyError[32];
   next.valid = validate(next, readyError, sizeof(readyError));
-  persist(next);
+  if (!persist(next)) return fail("NVS write failed");
   if (!next.valid) return fail(readyError[0] ? readyError : "bridge missing");
   return true;
 }
 
 void bridgeConfigClear() {
   Preferences prefs;
-  prefs.begin("buddy", false);
-  prefs.remove("br_ssid");
-  prefs.remove("br_pass");
-  prefs.remove("br_host");
-  prefs.remove("br_port");
-  prefs.remove("br_tok");
-  prefs.remove("br_ca");
-  prefs.putBool("br_valid", false);
+  if (!prefs.begin("buddy", false)) return;
+  const bool hadRecord = prefs.isKey(kBridgeRecordKey);
+  const bool invalidated = !hadRecord || prefs.remove(kBridgeRecordKey);
+  if (!invalidated) {
+    prefs.end();
+    return;
+  }
+  removeLegacyBridgeKeys(prefs);
   prefs.end();
   memset(&_cfg, 0, sizeof(_cfg));
   _cfg.port = 17878;

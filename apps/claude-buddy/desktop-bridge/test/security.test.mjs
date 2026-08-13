@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,7 +7,7 @@ import test from "node:test";
 import { CardputerBridge, loadConfig } from "../dist/index.js";
 import { localBridgeUrl } from "../../claude-plugin/hooks/relay.mjs";
 
-const strong = "012345678901234567890123";
+const strong = "Az09_-bcDE12fgHI34jkLM56noPQ78rs";
 
 function tempConfig() {
   const dir = mkdtempSync(join(tmpdir(), "cardputer-bridge-test-"));
@@ -25,8 +25,27 @@ async function unusedLoopbackPort() {
   });
 }
 
-test("rejects weak configured pairing token", () => {
-  assert.throws(() => loadConfig({ CARDPUTER_BRIDGE_CONFIG: tempConfig(), CARDPUTER_PAIRING_TOKEN: "weak" }), /at least 24/);
+test("configured credentials require generated-token shape and reject repeated input", () => {
+  const configured = tempConfig();
+  const loaded = loadConfig({
+    CARDPUTER_BRIDGE_CONFIG: configured,
+    CARDPUTER_PAIRING_TOKEN: strong,
+    CARDPUTER_HOOK_TOKEN: strong.split("").reverse().join("")
+  });
+  assert.equal(loaded.token, strong);
+  assert.throws(() => loadConfig({ CARDPUTER_BRIDGE_CONFIG: tempConfig(), CARDPUTER_PAIRING_TOKEN: "a".repeat(24) }), /32-character URL-safe/);
+  assert.throws(() => loadConfig({ CARDPUTER_BRIDGE_CONFIG: tempConfig(), CARDPUTER_PAIRING_TOKEN: "a".repeat(32) }), /32-character URL-safe/);
+  assert.throws(() => loadConfig({ CARDPUTER_BRIDGE_CONFIG: tempConfig(), CARDPUTER_HOOK_TOKEN: `${strong.slice(0, 31)}+` }), /32-character URL-safe/);
+});
+
+test("generated credentials use 24 CSPRNG bytes encoded as 32 URL-safe characters", () => {
+  const config = tempConfig();
+  const loaded = loadConfig({ CARDPUTER_BRIDGE_CONFIG: config });
+  assert.match(loaded.token, /^[A-Za-z0-9_-]{32}$/);
+  assert.match(loaded.hookToken, /^[A-Za-z0-9_-]{32}$/);
+  const persisted = JSON.parse(readFileSync(config, "utf8"));
+  assert.equal(persisted.token, loaded.token);
+  assert.equal(persisted.hookToken, loaded.hookToken);
 });
 
 test("persists generated credentials 0600 and keeps hook traffic loopback", () => {
@@ -67,6 +86,23 @@ test("hook requires credential, bounds body, and health omits content", async ()
   } finally {
     await bridge.stop();
   }
+});
+
+test("hook listener configures bounded admission before listening", () => {
+  const bridge = new CardputerBridge({
+    hookPort: 17877,
+    devicePort: 17878,
+    deviceHost: "127.0.0.1",
+    token: strong,
+    hookToken: strong.split("").reverse().join(""),
+    configPath: tempConfig()
+  });
+  const hookServer = bridge.hookServer;
+  assert.equal(hookServer.requestTimeout, 15_000);
+  assert.equal(hookServer.headersTimeout, 10_000);
+  assert.equal(hookServer.keepAliveTimeout, 5_000);
+  assert.equal(hookServer.maxConnections, 32);
+  assert.equal(hookServer.maxRequestsPerSocket, 16);
 });
 
 test("secure pairing config requires TLS and emits wss with public CA", () => {

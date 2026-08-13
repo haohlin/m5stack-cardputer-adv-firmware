@@ -196,13 +196,13 @@ bool testTimeoutAbortsAndRemovesPartialCharacter() {
 
 bool testValidBridgeConfigStillSaves() {
   resetHarness();
-  static const char validJson[] = "{\"endpoint\":\"wss://h/device\",\"token\":\"012345678901234567890123\",\"ca\":\"-----BEGIN CERTIFICATE-----x-----END CERTIFICATE-----\"}";
+  static const char validJson[] = "{\"endpoint\":\"wss://h/device\",\"token\":\"Az09_-bcDE12fgHI34jkLM56noPQ78rs\",\"ca\":\"-----BEGIN CERTIFICATE-----x-----END CERTIFICATE-----\"}";
   auto start = begin("bridge-config", sizeof(validJson) - 1);
   send(start);
   CHECK(ackIs("char_begin", true));
   auto openFile = file("bridge.json", sizeof(validJson) - 1);
   send(openFile);
-  auto data = chunk("eyJlbmRwb2ludCI6IndzczovL2gvZGV2aWNlIiwidG9rZW4iOiIwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjMiLCJjYSI6Ii0tLS0tQkVHSU4gQ0VSVElGSUNBVEUtLS0tLXgtLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tIn0=");
+  auto data = chunk("eyJlbmRwb2ludCI6IndzczovL2gvZGV2aWNlIiwidG9rZW4iOiJBejA5Xy1iY0RFMTJmZ0hJMzRqa0xNNTZub1BRNzhycyIsImNhIjoiLS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0teC0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0ifQ==");
   send(data);
   auto fileEnd = command("file_end");
   send(fileEnd);

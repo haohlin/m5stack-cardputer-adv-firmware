@@ -25,18 +25,23 @@
   requires CA-validated WSS, atomic bridge config replacement, local protected
   hook credential, transactional character staging, bounded ZIP extraction,
   exact confirmation, and matching physical UI arm for serial write/clone.
+- Task 7b review remediation now requires CSPRNG-shaped bridge credentials,
+  stores complete bridge state in one crash-atomic NVS record, binds serial
+  write/clone to the armed card identity, and bounds loopback hook listener
+  timeouts, connections, and requests per socket.
 
 ## Latest verification
 
-- RFID2 Launcher-OTA security build: 609,449 bytes.
-- Claude Buddy Launcher-OTA security build: 1,816,521 bytes.
+- RFID2 Launcher-OTA review-remediation build: 610,273 bytes.
+- Claude Buddy Launcher-OTA review-remediation build: 1,817,425 bytes.
 - Both fit Launcher `ota_0` limit: 5,177,344 bytes.
 - Root tool checks and focused RFID2 and Claude Buddy host security tests passed.
 - Historical v1.3.0 source build passed; its clean-build hash differs from the
   observed binary as accepted floating-dependency drift.
 - Security regressions cover unauthenticated/oversized hook rejection,
-  sanitized health, weak token rejection, secure pairing, bridge transfer
-  rejection, character rollback, ZIP limits, and RFID arm parsing.
+  sanitized health, configured/generated token rules, hook admission limits,
+  secure pairing, atomic bridge-record integrity, bridge transfer rejection,
+  character rollback, ZIP limits, and RFID arm identity matching.
 
 ## Pending hardware proof
 

@@ -133,6 +133,7 @@ PendingAction pendingAction = PendingAction::None;
 UiMode armedMode = UiMode::Read;
 uint8_t armedSlot = 0;
 uint32_t armedUntilMs = 0;
+String armedCardUid;
 bool writeDone = false;
 
 // Auto-trigger guard: tracks the UID of the last card that triggered an
@@ -268,6 +269,7 @@ bool isArmedAction(PendingAction action) {
 void cancelArm() {
   pendingAction = PendingAction::None;
   armedUntilMs = 0;
+  armedCardUid = "";
 }
 
 void resetAutoTrigger() {
@@ -728,6 +730,9 @@ void armSelection(PendingAction action) {
   armedMode = selectedMode;
   armedSlot = selectedSlot;
   armedUntilMs = rfidWriteArmDeadline(millis());
+  armedCardUid = ((action == PendingAction::WriteSlot || action == PendingAction::CloneSlot) && lastCard.valid)
+                     ? lastCard.uid
+                     : "";
   _armedCache.dirty = true;  // force full redraw on first drawArmedScreen() call
 }
 
@@ -1982,11 +1987,11 @@ int parseOptionalSlot(String tail, bool& confirmed) {
   return parseSlotNumber(tail);
 }
 
-bool serialDestructiveArmMatches(PendingAction action, UiMode mode, uint8_t slot) {
+bool serialDestructiveSelectionMatches(PendingAction action, UiMode mode, uint8_t slot) {
   const bool selectionMatches = selectedMode == mode && selectedSlot == slot &&
                                 armedMode == mode && armedSlot == slot &&
                                 pendingAction == action;
-  return rfidSerialDestructiveArmValid(millis(), armedUntilMs, lastCard.valid, selectionMatches);
+  return selectionMatches && rfidArmStillValid(millis(), armedUntilMs) && armedCardUid.length();
 }
 
 void serialArmRequired(const char* operation, uint8_t slot) {
@@ -1994,6 +1999,26 @@ void serialArmRequired(const char* operation, uint8_t slot) {
   emitMessage("error", title + ": arm matching " + slotTitle(slot) +
                          " on physical UI, keep card present, then resend within 8s");
   drawLines(title.c_str(), slotTitle(slot), "Arm on device UI", "Keep card present");
+}
+
+bool serialDestructiveCardReady(PendingAction action, UiMode mode, uint8_t slot,
+                                const char* operation) {
+  if (!serialDestructiveSelectionMatches(action, mode, slot)) {
+    serialArmRequired(operation, slot);
+    return false;
+  }
+  if (!selectPresentCard(operation)) return false;
+
+  const String currentUid = uidToString();
+  if (!rfidSerialDestructiveArmValid(millis(), armedUntilMs, true, true,
+                                     armedCardUid.c_str(), currentUid.c_str())) {
+    emitMessage("error", String(operation) + " blocked: card changed after physical UI arm; cancel and re-arm with intended card");
+    drawLines((String(operation) + " blocked").c_str(), "Card changed", "Cancel and re-arm", "on physical UI");
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+    return false;
+  }
+  return true;
 }
 
 void executeSelectedAction() {
@@ -2222,6 +2247,11 @@ void pollCardPreview() {
   lastCard.typeName = typeName;
   lastCard.seenAtMs = now;
 
+  if (armedCardUid.length() == 0 &&
+      (pendingAction == PendingAction::WriteSlot || pendingAction == PendingAction::CloneSlot)) {
+    armedCardUid = uid;
+  }
+
   if (shouldReport) {
     emitEventPrefix("card");
     Serial.print(",\"uid\":");
@@ -2361,11 +2391,10 @@ void processCommand(String command) {
     } else if (!confirmed) {
       emitMessage("error", "write requires explicit confirm: write " + String(parsedSlot + 1) + " confirm");
       drawLines("Write blocked", slotSummary((uint8_t)parsedSlot), "Serial needs confirm");
-    } else if (!serialDestructiveArmMatches(PendingAction::WriteSlot, UiMode::Write, (uint8_t)parsedSlot)) {
-      serialArmRequired("write", (uint8_t)parsedSlot);
-    } else {
+    } else if (serialDestructiveCardReady(PendingAction::WriteSlot, UiMode::Write,
+                                          (uint8_t)parsedSlot, "write")) {
       cancelArm();
-      writeStoredDumpToPresentClassic1k((uint8_t)parsedSlot);
+      writeStoredDumpToSelectedClassic1k((uint8_t)parsedSlot);
     }
   } else if (command.startsWith("write-block ")) {
     const size_t confirmedLength = rfidConfirmedCommandLength(command.c_str());
@@ -2384,11 +2413,10 @@ void processCommand(String command) {
     } else if (!confirmed) {
       emitMessage("error", "clone rewrites UID/block 0 and needs a MAGIC card; confirm: clone " + String(parsedSlot + 1) + " confirm");
       drawLines("Clone blocked", slotSummary((uint8_t)parsedSlot), "Serial needs confirm", "needs MAGIC card");
-    } else if (!serialDestructiveArmMatches(PendingAction::CloneSlot, UiMode::Clone, (uint8_t)parsedSlot)) {
-      serialArmRequired("clone", (uint8_t)parsedSlot);
-    } else {
+    } else if (serialDestructiveCardReady(PendingAction::CloneSlot, UiMode::Clone,
+                                          (uint8_t)parsedSlot, "clone")) {
       cancelArm();
-      cloneStoredDumpToPresentClassic1k((uint8_t)parsedSlot);
+      cloneStoredDumpToSelectedClassic1k((uint8_t)parsedSlot);
     }
   } else if (command == "keys") {
     emitEventPrefix("keys");

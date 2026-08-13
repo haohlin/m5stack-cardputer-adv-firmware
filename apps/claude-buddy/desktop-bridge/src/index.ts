@@ -15,7 +15,13 @@ const PROTOCOL_VERSION = 1;
 const MAX_TEXT = 480;
 const MAX_HOOK_BODY_BYTES = 32 * 1024;
 const MAX_PENDING_QUESTIONS = 8;
-const MIN_TOKEN_LENGTH = 24;
+const TOKEN_LENGTH = 32;
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32}$/;
+const HOOK_REQUEST_TIMEOUT_MS = 15_000;
+const HOOK_HEADERS_TIMEOUT_MS = 10_000;
+const HOOK_KEEP_ALIVE_TIMEOUT_MS = 5_000;
+const HOOK_MAX_CONNECTIONS = 32;
+const HOOK_MAX_REQUESTS_PER_SOCKET = 16;
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
@@ -52,7 +58,16 @@ function parsePort(value: string | undefined, fallback: number): number {
 }
 
 function requireStrongToken(value: string, label: string): string {
-  if (value.length < MIN_TOKEN_LENGTH) throw new Error(`${label} must be at least ${MIN_TOKEN_LENGTH} characters`);
+  let repeated = false;
+  for (let period = 1; period <= TOKEN_LENGTH / 2; period += 1) {
+    if (TOKEN_LENGTH % period === 0 && value === value.slice(0, period).repeat(TOKEN_LENGTH / period)) {
+      repeated = true;
+      break;
+    }
+  }
+  if (!TOKEN_PATTERN.test(value) || repeated) {
+    throw new Error(`${label} must be a ${TOKEN_LENGTH}-character URL-safe token provisioned from a CSPRNG`);
+  }
   return value;
 }
 
@@ -166,7 +181,13 @@ export class CardputerBridge {
   private deviceServer: ReturnType<typeof createSecureServer> | null = null;
   private wsServer = new WebSocketServer({ noServer: true });
 
-  constructor(private readonly config: BridgeConfig) {}
+  constructor(private readonly config: BridgeConfig) {
+    this.hookServer.requestTimeout = HOOK_REQUEST_TIMEOUT_MS;
+    this.hookServer.headersTimeout = HOOK_HEADERS_TIMEOUT_MS;
+    this.hookServer.keepAliveTimeout = HOOK_KEEP_ALIVE_TIMEOUT_MS;
+    this.hookServer.maxConnections = HOOK_MAX_CONNECTIONS;
+    this.hookServer.maxRequestsPerSocket = HOOK_MAX_REQUESTS_PER_SOCKET;
+  }
 
   private tlsMaterial(): { cert: string; key: string; ca: string } | null {
     const { tlsCertPath, tlsKeyPath, tlsCaPath } = this.config;

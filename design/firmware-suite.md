@@ -66,14 +66,23 @@ outside normal app OTA path.
 - Formatted protocol replies transmit only when `snprintf` reports complete
   output within the destination buffer.
 - Optional Wi-Fi bridge splits loopback-only HTTP health/hooks from separate
-  TLS WebSocket device listener. Hook/device use independent high-entropy bearer
-  credentials; hook input, pending questions, and timeouts are bounded before
-  parsing. Health exposes no summary, device state, or device identity.
+  TLS WebSocket device listener. Hook/device use independent 32-character
+  URL-safe bearer credentials generated from 24 CSPRNG bytes. Configured values
+  must have the same shape and cannot be exact repeated patterns, but validation
+  cannot prove human-supplied entropy: operators must provision them from a
+  CSPRNG. Hook input, pending questions, and timeouts are bounded before parsing.
+  Hook HTTP uses 15-second request, 10-second header, and 5-second keep-alive
+  timeouts, at most 32 connections, and 16 requests per socket. Health exposes
+  no summary, device state, or device identity.
 - Physical Wi-Fi pairing accepts only complete `wss://.../device` replacement
   config containing endpoint, pairing token, and public PEM CA. Firmware sends
   token in Authorization header and uses CA-validated `beginSslWithCA`; it
   rejects legacy `ws://`, query token, weak token, partial update, and missing
   CA. TLS private key remains desktop-local.
+- Firmware persists the complete bridge structure in one versioned, checksummed
+  NVS blob. Endpoint, bearer token, CA, and Wi-Fi fields never gain authority as
+  separate keys; malformed or incomplete blobs fail closed. Successful blob
+  commit precedes legacy-key cleanup, and clear invalidates the blob first.
 - Character packs stage in reserved LittleFS. Transfer abort, timeout,
   malformed input, and incomplete content retain active character; only fully
   received/parsed pack replaces it. ZIP prep bounds members, compressed and
@@ -105,9 +114,12 @@ outside normal app OTA path.
   directories, not symlink aliases; cleanup is limited to the fixed
   `RFID2-Clone-Station-v*` artifact family and skips symlinks.
 - Serial `write`/`clone` require exact trailing `confirm` plus matching fresh
-  physical UI arm, target slot, and present card inside eight-second window.
-  Serial literal `write-block` is disabled because arbitrary payload has no
-  existing physical UI arm. Physical UI write/clone behavior remains unchanged.
+  physical UI arm, target slot, and present card inside eight-second window. The
+  first card identity visible for that arm is retained until cancel/expiry;
+  serial execution reselects the card and rejects an identity swap. Serial
+  literal `write-block` is disabled because arbitrary payload has no existing
+  physical UI arm. Physical UI write/clone behavior remains unchanged, including
+  arming before presenting a destination card.
 - RFID dump/key data on removable microSD and USB serial is owner-operated lab
   data. This release does not claim encrypted storage; confidential deployments
   need user-approved encrypted storage or hardware-backed key design.

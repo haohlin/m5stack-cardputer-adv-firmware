@@ -38,8 +38,11 @@ inline bool rfidArmStillValid(uint32_t nowMs, uint32_t deadlineMs) {
 }
 
 inline bool rfidSerialDestructiveArmValid(uint32_t nowMs, uint32_t deadlineMs,
-                                          bool physicalCardPresent, bool armMatchesSelection) {
-  return physicalCardPresent && armMatchesSelection && rfidArmStillValid(nowMs, deadlineMs);
+                                          bool physicalCardPresent, bool armMatchesSelection,
+                                          const char* armedCardUid, const char* currentCardUid) {
+  return physicalCardPresent && armMatchesSelection && armedCardUid && armedCardUid[0] &&
+         currentCardUid && strcmp(armedCardUid, currentCardUid) == 0 &&
+         rfidArmStillValid(nowMs, deadlineMs);
 }
 
 inline bool rfidPersistFileAllowed(size_t bytes, size_t limit) {

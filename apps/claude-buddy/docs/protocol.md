@@ -19,7 +19,7 @@ Device configuration requires all of these values as one replacement:
   "v": 1,
   "type": "claude-cardputer-bridge",
   "endpoint": "wss://192.168.1.10:17878/device",
-  "token": "high-entropy-pairing-token",
+  "token": "<32 URL-safe chars generated from 24 CSPRNG bytes>",
   "ca": "-----BEGIN CERTIFICATE-----\\n...public CA...\\n-----END CERTIFICATE-----\\n"
 }
 ```
@@ -30,11 +30,24 @@ the pairing token only in WebSocket `Authorization: Bearer ...` during TLS
 upgrade. Firmware uses CA-validated `beginSslWithCA`; it never enables insecure
 TLS mode.
 
+Pairing and hook tokens are exactly 32 URL-safe Base64 characters
+(`[A-Za-z0-9_-]`), matching encoding of 24 CSPRNG bytes. Configured tokens also
+reject exact repeated patterns. These shape checks do not prove entropy in an
+arbitrary human-supplied value; use bridge-generated credentials or another
+CSPRNG, never a memorable phrase or repeated placeholder.
+
+Firmware persists one versioned, checksummed NVS record containing the entire
+bridge configuration. It never loads legacy endpoint/token/CA fields separately.
+A missing, malformed, partial, or failed replacement remains inactive; cleanup
+of legacy keys occurs only after the complete record is committed.
+
 Desktop service separates local HTTP from network device transport:
 
 - `GET http://127.0.0.1:17877/health` is loopback-only and content-free.
 - `POST http://127.0.0.1:17877/hook` is loopback-only, requires independent
-  bearer hook token, and rejects bodies over 32 KiB.
+  bearer hook token, rejects bodies over 32 KiB, and uses 15-second request,
+  10-second header, and 5-second keep-alive timeouts. Admission is capped at 32
+  connections and 16 requests per socket.
 - `wss://<host>:17878/device` is separate TLS listener. It requires pairing
   bearer token and never accepts token query parameters.
 

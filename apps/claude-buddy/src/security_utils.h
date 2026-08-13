@@ -55,3 +55,30 @@ inline bool buddyChunkFits(uint32_t fileExpected, uint32_t fileWritten,
 inline uint32_t buddyPairingPasskey(uint32_t randomValue) {
   return 100000U + (randomValue % 900000U);
 }
+
+constexpr size_t BUDDY_BRIDGE_TOKEN_CHARS = 32;
+
+inline bool buddyBridgeTokenAllowed(const char* token) {
+  if (!token || strlen(token) != BUDDY_BRIDGE_TOKEN_CHARS) return false;
+  for (size_t i = 0; i < BUDDY_BRIDGE_TOKEN_CHARS; ++i) {
+    const char c = token[i];
+    const bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9') || c == '-' || c == '_';
+    if (!safe) return false;
+  }
+
+  // Reject tokens made by repeating any smaller exact unit. This catches
+  // obvious configured placeholders; callers still must provision via CSPRNG.
+  for (size_t period = 1; period <= BUDDY_BRIDGE_TOKEN_CHARS / 2; ++period) {
+    if (BUDDY_BRIDGE_TOKEN_CHARS % period != 0) continue;
+    bool repeated = true;
+    for (size_t i = period; i < BUDDY_BRIDGE_TOKEN_CHARS; ++i) {
+      if (token[i] != token[i % period]) {
+        repeated = false;
+        break;
+      }
+    }
+    if (repeated) return false;
+  }
+  return true;
+}

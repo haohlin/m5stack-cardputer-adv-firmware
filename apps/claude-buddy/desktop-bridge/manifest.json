@@ -67,14 +67,14 @@
     "pairing_token": {
       "type": "string",
       "title": "Pairing Token",
-      "description": "Optional shared token. Leave blank to let the bridge generate and persist one locally.",
+      "description": "Optional 32-character URL-safe token from a CSPRNG. Leave blank to let the bridge generate and persist one locally.",
       "sensitive": true,
       "required": false
     },
     "hook_token": {
       "type": "string",
       "title": "Hook Token",
-      "description": "Optional localhost hook token. Leave blank to generate and persist one locally.",
+      "description": "Optional 32-character URL-safe CSPRNG token for localhost hooks. Leave blank to generate and persist one locally.",
       "sensitive": true,
       "required": false
     },

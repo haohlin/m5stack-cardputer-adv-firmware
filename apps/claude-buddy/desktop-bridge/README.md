@@ -42,6 +42,14 @@ CARDPUTER_BRIDGE_TLS_CA=/private/path/bridge-ca.pem \
 The bridge generates independent pairing and hook credentials when omitted,
 persists them in `~/.claude-cardputer-bridge/config.json` mode `0600`, and
 never prints them. Plugin relay reads only local hook credential from this file.
+Each token encodes 24 CSPRNG bytes as exactly 32 URL-safe characters. Explicit
+tokens must use the same shape and cannot be an exact repeated pattern. Shape
+validation cannot establish human-supplied entropy; provision explicit values
+with a CSPRNG.
+
+Loopback hook admission uses a 15-second request timeout, 10-second header
+timeout, 5-second keep-alive timeout, 32-connection cap, 16 requests per socket,
+and 32 KiB body cap.
 
 ## Development
 
