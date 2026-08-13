@@ -27,7 +27,10 @@ buddy_ini="apps/claude-buddy/platformio.ini"
 [[ "$(rg -c '^\[env:' "$buddy_ini")" == "1" ]]
 rg -q '^\[env:cardputer-adv-launcher-ota\]$' "$buddy_ini"
 rg -q '^board_build\.partitions = ../../contracts/launcher/cardputer-adv-8mb\.csv$' "$buddy_ini"
-! rg -q 'no_ota\.csv|^\[env:cardputer-adv\]$|^\[env:m5stickc-plus\]$' "$buddy_ini"
+if rg -q 'no_ota\.csv|^\[env:cardputer-adv\]$|^\[env:m5stickc-plus\]$' "$buddy_ini"; then
+  echo "Current Buddy PlatformIO config exposes a legacy non-Launcher environment" >&2
+  exit 1
+fi
 
 buddy_wrapper="apps/claude-buddy/scripts/build_cardputer_adv.sh"
 rg -Fq 'exec ./scripts/pio_local.sh run -e cardputer-adv-launcher-ota "$@"' "$buddy_wrapper"
@@ -58,16 +61,23 @@ for helper in \
 done
 [[ -f apps/claude-buddy/scripts/recovery/merge_bin.py ]]
 
-normal_docs=(
-  README.md
-  docs/development.md
-  apps/claude-buddy/README.md
-  apps/claude-buddy/apps/README.md
-  apps/claude-buddy/docs/BUILDING.md
-  apps/claude-buddy/docs/debugging.md
-  apps/claude-buddy/docs/packaging.md
+# Discover every normal Buddy/root Markdown document. Exclude only material
+# whose path explicitly identifies it as recovery or immutable history.
+normal_docs=(README.md)
+while IFS= read -r doc; do
+  normal_docs+=("$doc")
+done < <(
+  rg --files docs apps/claude-buddy -g '*.md' |
+    rg -v '(^|/)(docs/history|scripts/recovery)/'
 )
-! rg -n '(\./scripts/(flash|erase)[^ ]*|pio run .* -t (upload|erase)|esptool .* (write_flash|erase_flash)|M5Burner)' "${normal_docs[@]}"
-! ./cardputer --help | rg -qi '(flash|erase|scripts/recovery)'
+if direct_guidance="$(rg -n -i '(\./scripts/(flash|erase)[^ ]*|flash_cardputer_adv|erase_cardputer_adv|pio run .* -t (upload|erase)|esptool .* (write_flash|erase_flash)|M5Burner|write_flash 0x0|erase_flash|download mode|normal merged firmware image|generated merged binary)' "${normal_docs[@]}")"; then
+  echo "Direct-flash guidance found in normal Buddy documentation:" >&2
+  printf '%s\n' "$direct_guidance" >&2
+  exit 1
+fi
+if ./cardputer --help | rg -qi '(flash|erase|scripts/recovery)'; then
+  echo "Root cardputer interface exposes recovery operations" >&2
+  exit 1
+fi
 
 echo "cardputer tool static checks passed"

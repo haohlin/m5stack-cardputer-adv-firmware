@@ -49,11 +49,10 @@ Official Cardputer-Adv specs that matter to firmware:
 
 Official PlatformIO guidance uses Arduino framework, `espressif32@6.7.0`, `esp32-s3-devkitc-1`, USB CDC build flags, and `M5Cardputer=https://github.com/m5stack/M5Cardputer`. This workspace now follows that board/platform target, adds `M5GFX_BOARD=board_M5CardputerADV` to remove avoidable board auto-detection ambiguity, and uses `M5Cardputer @ ^1.1.1`.
 
-Official flashing/download-mode notes:
-
-- Set the Cardputer-Adv side power switch to OFF.
-- Hold `G0`, apply USB power, then release it to enter download mode.
-- M5Stack recommends charging with the power switch ON.
+Historical recovery research also recorded the board's bootloader entry
+sequence. That procedure can replace Launcher and now belongs exclusively to
+explicit recovery work; it is not a delivery or installation path. M5Stack's
+normal charging guidance remains to keep the power switch on.
 
 ## Community Guidance
 
@@ -63,10 +62,14 @@ superseded by the collection's Launcher USB MSC and Launcher OTA contract.
 Community writeups point to the same practical path:
 
 - Use PlatformIO + Arduino + M5Cardputer/M5Unified for custom firmware.
-- Prefer M5Burner or a merged `write_flash 0x0` binary for distributing firmware.
+- Pre-collection community notes favored merged full-flash distribution. That
+  is retained only as historical recovery context; current delivery uses
+  Launcher USB MSC and Launcher OTA.
 - Keep Cardputer-Adv keyboard handling on the TCA8418 path. DeepWiki's Cardputer-Adv notes call out I2C address `0x34`, active-low INT on GPIO11, and the need to drain the event FIFO.
 - Avoid older Cardputer GPIO-matrix keyboard code on ADV. Community reports of firmware stuck on start screens or only partially seeing keys match the hardware difference between Cardputer/Cardputer v1.1 and Cardputer-Adv.
-- M5Launcher is popular for swapping firmware from SD card, but there are compatibility reports around Cardputer-Adv keyboard behavior in launched apps. For the first project, producing a normal merged firmware image is the lower-risk path.
+- Early community reports raised Cardputer-Adv keyboard compatibility concerns
+  with Launcher. Current collection builds have a pinned Launcher partition
+  contract and use Launcher as the required normal installation path.
 
 ## Chosen Direction
 
@@ -76,8 +79,8 @@ The project uses:
 - The Cardputer-Adv community fork as the starting hardware port.
 - M5Stack's official `M5Cardputer` and `M5Unified` libraries instead of custom display, keyboard, IMU, or audio drivers.
 - PlatformIO as the build system, because it is used by the official Anthropic repo, M5Stack docs, and most community firmware examples.
-- A generated merged binary for M5Burner/esptool, using the historical hook now
-  preserved at `scripts/recovery/merge_bin.py`.
+- Root `./cardputer build|release|stage claude-buddy` with Launcher USB MSC and
+  Launcher OTA for normal delivery.
 - A narrow Cardputer-Adv keyboard reader shim that still uses M5Stack's bundled `Adafruit_TCA8418` driver, but explicitly binds it to GPIO8/GPIO9 and polls the FIFO so missed GPIO11 interrupt edges do not leave the UI appearing frozen.
 - A device-derived static six-digit BLE PIN in secure mode. The pairing UI is only shown during an active pairing request.
 - Non-blocking Serial protocol writes and bounded BLE receive draining, so Claude Desktop traffic cannot starve the Cardputer keyboard scan loop after pairing.
@@ -86,4 +89,8 @@ Deferred:
 
 - Direct Anthropic API calls from the device. The official Hardware Buddy path is local BLE and needs no API key.
 - A custom CLI bridge. Upstream PR #12 exists, but desktop Hardware Buddy is currently the supported approve/deny route.
-- M5Launcher-specific app packaging. It can be added after hardware validation with the merged firmware path.
+- Further Launcher compatibility work beyond the pinned collection contract.
+
+Earlier working trees generated merged full-flash images. Their hook remains
+under `scripts/recovery/` solely to preserve explicitly approved historical
+recovery capability; it is not part of normal build, release, or installation.

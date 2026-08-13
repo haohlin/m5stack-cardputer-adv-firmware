@@ -25,8 +25,8 @@ Arduino-ESP32 Wi-Fi source files from PlatformIO.
   - Wi-Fi operating current: DC 4.2 V at 132.3 mA
   - BLE operating current: DC 4.2 V at 154.6 mA
 - Charging requires the physical power switch to be `ON`.
-- Recovery/download mode: power switch `OFF`, hold `G0`, apply USB power, then
-  release `G0`.
+- Official docs also define a bootloader recovery procedure. It is recovery-only
+  and outside this collection's normal Launcher installation workflow.
 - Relevant ADV pins:
   - battery ADC: G10
   - keyboard TCA8418: SDA G8, SCL G9, INT G11
