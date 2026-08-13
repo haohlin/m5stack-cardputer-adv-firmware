@@ -1977,8 +1977,8 @@ String commandTail(const String& command, const char* verb) {
 }
 
 bool consumeConfirm(String& tail) {
-  const size_t bodyLength = rfidConfirmedCommandLength(tail.c_str());
-  if (!bodyLength) return false;
+  size_t bodyLength = 0;
+  if (!rfidConfirmedCommandLength(tail.c_str(), &bodyLength)) return false;
   tail = tail.substring(0, bodyLength);
   tail.trim();
   return true;
@@ -2401,8 +2401,8 @@ void processCommand(String command) {
       writeStoredDumpToSelectedClassic1k((uint8_t)parsedSlot);
     }
   } else if (command.startsWith("write-block ")) {
-    const size_t confirmedLength = rfidConfirmedCommandLength(command.c_str());
-    if (!confirmedLength) {
+    size_t confirmedLength = 0;
+    if (!rfidConfirmedCommandLength(command.c_str(), &confirmedLength)) {
       emitMessage("error", "write-block requires explicit confirm");
       drawLines("Write blocked", "Serial needs confirm", "write-block ... confirm");
     } else {

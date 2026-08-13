@@ -79,7 +79,13 @@ outside normal app OTA path.
   10-second header, and 5-second keep-alive timeouts, at most 32 connections, 16
   requests per socket, and 32 KiB stdin/body/response bounds. Health exposes no
   summary, device state, or identity. MCP tools never return pairing bearer;
-  protected local pairing-file CLI remains.
+  protected local pairing-file CLI remains. That CLI validates TLS material and
+  endpoint before filesystem mutation, creates its absent direct output parent
+  mode `0700`, exclusively reserves the destination mode `0700`, then creates
+  both files exclusively and explicitly tightens them to mode `0600` regardless
+  of process umask. Existing/raced directory or symlink destinations are never
+  replaced; validation/write failure leaves no partial destination created by
+  the CLI.
 - TLS device listener parses origin-form upgrade target against fixed base,
   ignores `Host`, and bounds handshake/idle/request/header/keep-alive time,
   connections, requests per socket, and 4096-byte text frames before auth/JSON.
@@ -116,6 +122,10 @@ outside normal app OTA path.
   forms are never accepted. `write` and `clone` have a matching physical UI arm
   requirement, while serial literal `write-block` is rejected rather than given
   an unsafe bypass around the physical UI workflow.
+- Confirmation parsing returns token validity separately from command-body
+  length. A valid empty body therefore authorizes only documented
+  `key clear confirm`, `key reset confirm`, or selected-slot `clear confirm`,
+  while missing, embedded, prefixed, and extra-token forms remain rejected.
 - Keyboard write, clone, and clear arming uses one rollover-safe 8-second
   deadline, matching the UI text and limiting unattended destructive state.
 - Persistent slot, key, and configuration inputs are bounded before parsing:

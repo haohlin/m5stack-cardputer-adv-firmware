@@ -2,7 +2,7 @@
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createSecureServer } from "node:https";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
@@ -150,7 +150,17 @@ export function configureDeviceServerAdmission<T extends AdmissionServer>(server
   return server;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
+function persistConfig(config: BridgeConfig): void {
+  writePersisted(config.configPath, {
+    hookPort: config.hookPort,
+    devicePort: config.devicePort,
+    token: config.token,
+    hookToken: config.hookToken,
+    credentialProvenance: CREDENTIAL_PROVENANCE
+  });
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, persist = true): BridgeConfig {
   for (const name of ["CARDPUTER_PAIRING_TOKEN", "CARDPUTER_HOOK_TOKEN"] as const) {
     if (env[name]?.trim()) {
       throw new Error(`${name} is not accepted; remove it and use bridge-generated credentials`);
@@ -168,8 +178,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   const hookToken = generatedByBridge && persisted.hookToken
     ? requireStrongToken(persisted.hookToken, "stored hook token")
     : generateToken();
-  writePersisted(path, { hookPort, devicePort, token, hookToken, credentialProvenance: CREDENTIAL_PROVENANCE });
-  return {
+  const config: BridgeConfig = {
     hookPort,
     devicePort,
     deviceHost: env.CARDPUTER_BRIDGE_DEVICE_BIND_HOST?.trim() ||
@@ -181,6 +190,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     tlsKeyPath: env.CARDPUTER_BRIDGE_TLS_KEY?.trim(),
     tlsCaPath: env.CARDPUTER_BRIDGE_TLS_CA?.trim()
   };
+  if (persist) persistConfig(config);
+  return config;
 }
 
 function text(value: unknown, fallback = ""): string {
@@ -376,12 +387,52 @@ export class CardputerBridge {
   }
 
   writePairingConfig(dir: string, endpoint?: string): void {
+    const pairing = this.pairingConfig(endpoint);
     const target = resolve(dir);
-    if (existsSync(target)) throw new Error(`pairing output already exists: ${target}`);
-    mkdirSync(target, { recursive: false, mode: 0o700 });
-    chmodSync(target, 0o700);
-    writeFileSync(join(target, "manifest.json"), `${JSON.stringify({ name: "bridge-config", type: "claude-cardputer-bridge", version: PROTOCOL_VERSION }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-    writeFileSync(join(target, "bridge.json"), `${JSON.stringify(this.pairingConfig(endpoint), null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    const parent = dirname(target);
+    mkdirSync(parent, { recursive: true, mode: 0o700 });
+    const parentInfo = lstatSync(parent);
+    if (!parentInfo.isDirectory() || parentInfo.isSymbolicLink()) {
+      throw new Error(`pairing output parent must be one real directory: ${parent}`);
+    }
+    chmodSync(parent, 0o700);
+    let reserved = false;
+    let complete = false;
+    let reservedDevice = 0;
+    let reservedInode = 0;
+    try {
+      try {
+        mkdirSync(target, { recursive: false, mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error(`pairing output already exists: ${target}`);
+        }
+        throw error;
+      }
+      reserved = true;
+      const targetInfo = lstatSync(target);
+      if (!targetInfo.isDirectory() || targetInfo.isSymbolicLink()) {
+        throw new Error(`pairing output must be one real directory: ${target}`);
+      }
+      reservedDevice = targetInfo.dev;
+      reservedInode = targetInfo.ino;
+      chmodSync(target, 0o700);
+      const manifestPath = join(target, "manifest.json");
+      const bridgePath = join(target, "bridge.json");
+      writeFileSync(manifestPath, `${JSON.stringify({ name: "bridge-config", type: "claude-cardputer-bridge", version: PROTOCOL_VERSION }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      chmodSync(manifestPath, 0o600);
+      writeFileSync(bridgePath, `${JSON.stringify(pairing, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      chmodSync(bridgePath, 0o600);
+      complete = true;
+    } finally {
+      if (reserved && !complete && existsSync(target)) {
+        const current = lstatSync(target);
+        if (current.isDirectory() && !current.isSymbolicLink() &&
+            current.dev === reservedDevice && current.ino === reservedInode) {
+          rmSync(target, { recursive: true, force: true });
+        }
+      }
+    }
   }
 
   private attachDevice(ws: WebSocket): void {
@@ -497,10 +548,16 @@ export function registerTools(server: McpServer, bridge: CardputerBridge): void 
 }
 
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const bridge = new CardputerBridge(config);
   const writeIndex = process.argv.indexOf("--write-pairing-config");
-  if (writeIndex !== -1) { bridge.writePairingConfig(process.argv[writeIndex + 1] || "bridge-config", process.env.CARDPUTER_BRIDGE_ENDPOINT); console.error("Wrote secure Cardputer bridge config"); return; }
+  const config = loadConfig(process.env, writeIndex === -1);
+  const bridge = new CardputerBridge(config);
+  if (writeIndex !== -1) {
+    bridge.pairingConfig(process.env.CARDPUTER_BRIDGE_ENDPOINT);
+    persistConfig(config);
+    bridge.writePairingConfig(process.argv[writeIndex + 1] || "bridge-config", process.env.CARDPUTER_BRIDGE_ENDPOINT);
+    console.error("Wrote secure Cardputer bridge config");
+    return;
+  }
   if (process.argv.includes("--print-config")) { console.log(JSON.stringify({ hookPort: config.hookPort, devicePort: config.devicePort, deviceBindHost: config.deviceHost, configPath: config.configPath, pairingTokenConfigured: Boolean(config.token), hookTokenConfigured: Boolean(config.hookToken), tlsConfigured: Boolean(config.tlsCertPath && config.tlsKeyPath && config.tlsCaPath) }, null, 2)); return; }
   await bridge.start();
   const mcpServer = new McpServer({ name: "claude-cardputer-bridge", version: "0.1.0" });

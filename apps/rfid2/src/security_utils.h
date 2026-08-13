@@ -16,8 +16,10 @@ enum class RfidArmOrigin : uint8_t {
   AutoCard,
 };
 
-inline size_t rfidConfirmedCommandLength(const char* command) {
-  if (!command) return 0;
+inline bool rfidConfirmedCommandLength(const char* command, size_t* bodyLength) {
+  if (!bodyLength) return false;
+  *bodyLength = 0;
+  if (!command) return false;
 
   size_t end = strlen(command);
   while (end > 0 && (command[end - 1] == ' ' || command[end - 1] == '\t')) end--;
@@ -27,12 +29,13 @@ inline size_t rfidConfirmedCommandLength(const char* command) {
   constexpr char kConfirm[] = "confirm";
   if (end - tokenStart != sizeof(kConfirm) - 1 ||
       strncmp(command + tokenStart, kConfirm, sizeof(kConfirm) - 1) != 0) {
-    return 0;
+    return false;
   }
 
   size_t bodyEnd = tokenStart;
   while (bodyEnd > 0 && (command[bodyEnd - 1] == ' ' || command[bodyEnd - 1] == '\t')) bodyEnd--;
-  return bodyEnd;
+  *bodyLength = bodyEnd;
+  return true;
 }
 
 inline uint32_t rfidWriteArmDeadline(uint32_t startedAtMs) {

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import test from "node:test";
@@ -284,4 +286,172 @@ test("secure pairing config requires TLS and emits wss with public CA", () => {
   assert.equal(pair.token, strong);
   assert.match(pair.ca, /BEGIN CERTIFICATE/);
   assert.throws(() => bridge.pairingConfig("ws://192.168.1.10:17878/device"), /must be wss/);
+});
+
+test("pairing CLI creates exact protected modes through absent release parent", t => {
+  const root = mkdtempSync(join(tmpdir(), "cardputer-pairing-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workingDirectory = join(root, "desktop-bridge");
+  mkdirSync(workingDirectory);
+  const configPath = join(root, "bridge-home", "config.json");
+  const certPath = join(root, "bridge-cert.pem");
+  const keyPath = join(root, "bridge-key.pem");
+  const caPath = join(root, "bridge-ca.pem");
+  writeFileSync(certPath, "certificate");
+  writeFileSync(keyPath, "private key");
+  writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n");
+  const environment = {
+    ...process.env,
+    CARDPUTER_BRIDGE_CONFIG: configPath,
+    CARDPUTER_BRIDGE_ENDPOINT: "wss://192.168.1.10:17878/device",
+    CARDPUTER_BRIDGE_TLS_CERT: certPath,
+    CARDPUTER_BRIDGE_TLS_KEY: keyPath,
+    CARDPUTER_BRIDGE_TLS_CA: caPath,
+    CARDPUTER_PAIRING_TOKEN: "",
+    CARDPUTER_HOOK_TOKEN: ""
+  };
+  const command = [
+    fileURLToPath(new URL("../dist/index.js", import.meta.url)),
+    "--write-pairing-config",
+    "../release/bridge-config"
+  ];
+
+  const shellCommand = ["-c", "umask 0777; exec \"$@\"", "pairing-test", process.execPath, ...command];
+  const first = spawnSync("/bin/sh", shellCommand, { cwd: workingDirectory, env: environment, encoding: "utf8" });
+  assert.equal(first.status, 0, first.stderr);
+  const parent = join(root, "release");
+  const target = join(parent, "bridge-config");
+  const manifest = join(target, "manifest.json");
+  const bridgeConfig = join(target, "bridge.json");
+  assert.equal(lstatSync(parent).mode & 0o777, 0o700);
+  assert.equal(lstatSync(target).mode & 0o777, 0o700);
+  assert.equal(lstatSync(manifest).mode & 0o777, 0o600);
+  assert.equal(lstatSync(bridgeConfig).mode & 0o777, 0o600);
+  const originalManifest = readFileSync(manifest, "utf8");
+  const originalBridge = readFileSync(bridgeConfig, "utf8");
+  assert.equal(JSON.parse(originalBridge).endpoint, "wss://192.168.1.10:17878/device");
+
+  const second = spawnSync("/bin/sh", shellCommand, { cwd: workingDirectory, env: environment, encoding: "utf8" });
+  assert.notEqual(second.status, 0);
+  assert.equal(readFileSync(manifest, "utf8"), originalManifest);
+  assert.equal(readFileSync(bridgeConfig, "utf8"), originalBridge);
+});
+
+test("pairing output validates TLS and endpoint before filesystem mutation", t => {
+  const root = mkdtempSync(join(tmpdir(), "cardputer-pairing-failure-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const noTlsParent = join(root, "no-tls-release");
+  const noTlsBridge = new CardputerBridge({
+    hookPort: 17877,
+    devicePort: 17878,
+    deviceHost: "127.0.0.1",
+    token: strong,
+    hookToken: strong,
+    configPath: join(root, "no-tls-config.json")
+  });
+  assert.throws(
+    () => noTlsBridge.writePairingConfig(join(noTlsParent, "bridge-config"), "wss://192.168.1.10:17878/device"),
+    /requires CARDPUTER_BRIDGE_TLS_CERT/
+  );
+  assert.equal(existsSync(noTlsParent), false);
+
+  const parent = join(root, "invalid-release");
+  mkdirSync(parent, { mode: 0o700 });
+  const certPath = join(root, "bridge-cert.pem");
+  const keyPath = join(root, "bridge-key.pem");
+  const caPath = join(root, "bridge-ca.pem");
+  writeFileSync(certPath, "certificate");
+  writeFileSync(keyPath, "private key");
+  writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n");
+  const bridge = new CardputerBridge({
+    hookPort: 17877,
+    devicePort: 17878,
+    deviceHost: "127.0.0.1",
+    token: strong,
+    hookToken: strong,
+    configPath: join(root, "invalid-config.json"),
+    tlsCertPath: certPath,
+    tlsKeyPath: keyPath,
+    tlsCaPath: caPath
+  });
+  const target = join(parent, "bridge-config");
+  assert.throws(() => bridge.writePairingConfig(target, "ws://192.168.1.10:17878/device"), /must be wss/);
+  assert.equal(existsSync(target), false);
+});
+
+test("invalid pairing CLI leaves credential config and absent output parent untouched", t => {
+  const root = mkdtempSync(join(tmpdir(), "cardputer-pairing-invalid-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workingDirectory = join(root, "desktop-bridge");
+  mkdirSync(workingDirectory);
+  const configPath = join(root, "bridge-home", "config.json");
+  const certPath = join(root, "bridge-cert.pem");
+  const keyPath = join(root, "bridge-key.pem");
+  const caPath = join(root, "bridge-ca.pem");
+  writeFileSync(certPath, "certificate");
+  writeFileSync(keyPath, "private key");
+  writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n");
+  const outputParent = join(root, "release");
+  const result = spawnSync(process.execPath, [
+    fileURLToPath(new URL("../dist/index.js", import.meta.url)),
+    "--write-pairing-config",
+    join(outputParent, "bridge-config")
+  ], {
+    cwd: workingDirectory,
+    env: {
+      ...process.env,
+      CARDPUTER_BRIDGE_CONFIG: configPath,
+      CARDPUTER_BRIDGE_ENDPOINT: "ws://192.168.1.10:17878/device",
+      CARDPUTER_BRIDGE_TLS_CERT: certPath,
+      CARDPUTER_BRIDGE_TLS_KEY: keyPath,
+      CARDPUTER_BRIDGE_TLS_CA: caPath,
+      CARDPUTER_PAIRING_TOKEN: "",
+      CARDPUTER_HOOK_TOKEN: ""
+    },
+    encoding: "utf8"
+  });
+  assert.notEqual(result.status, 0);
+  assert.equal(existsSync(configPath), false);
+  assert.equal(existsSync(outputParent), false);
+});
+
+test("pairing publication never replaces an existing empty destination", t => {
+  const root = mkdtempSync(join(tmpdir(), "cardputer-pairing-race-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const parent = join(root, "release");
+  const target = join(parent, "bridge-config");
+  mkdirSync(parent, { mode: 0o700 });
+  mkdirSync(target, { mode: 0o700 });
+  const certPath = join(root, "bridge-cert.pem");
+  const keyPath = join(root, "bridge-key.pem");
+  const caPath = join(root, "bridge-ca.pem");
+  writeFileSync(certPath, "certificate");
+  writeFileSync(keyPath, "private key");
+  writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n");
+  const bridge = new CardputerBridge({ hookPort: 17877, devicePort: 17878, deviceHost: "127.0.0.1", token: strong, hookToken: strong, configPath: join(root, "race-config.json"), tlsCertPath: certPath, tlsKeyPath: keyPath, tlsCaPath: caPath });
+  assert.throws(() => bridge.writePairingConfig(target, "wss://192.168.1.10:17878/device"), /already exists/);
+  assert.deepEqual(readdirSync(target), []);
+});
+
+test("pairing output never follows a competing symlink destination", t => {
+  const root = mkdtempSync(join(tmpdir(), "cardputer-pairing-symlink-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const parent = join(root, "release");
+  const outside = join(root, "outside");
+  const target = join(parent, "bridge-config");
+  mkdirSync(parent, { mode: 0o700 });
+  mkdirSync(outside);
+  writeFileSync(join(outside, "keep"), "keep");
+  symlinkSync(outside, target, "dir");
+  const configPath = join(root, "symlink-config.json");
+  const certPath = join(root, "bridge-cert.pem");
+  const keyPath = join(root, "bridge-key.pem");
+  const caPath = join(root, "bridge-ca.pem");
+  writeFileSync(certPath, "certificate");
+  writeFileSync(keyPath, "private key");
+  writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n");
+  const bridge = new CardputerBridge({ hookPort: 17877, devicePort: 17878, deviceHost: "127.0.0.1", token: strong, hookToken: strong, configPath, tlsCertPath: certPath, tlsKeyPath: keyPath, tlsCaPath: caPath });
+  assert.throws(() => bridge.writePairingConfig(target, "wss://192.168.1.10:17878/device"), /already exists/);
+  assert.equal(readFileSync(join(outside, "keep"), "utf8"), "keep");
+  assert.deepEqual(readdirSync(outside), ["keep"]);
 });

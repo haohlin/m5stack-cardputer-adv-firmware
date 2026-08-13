@@ -40,6 +40,13 @@
   debug redaction, all-app contained Launcher staging, semantic character
   validation/resource limits, RFID physical-key arm origin, and exact local-state
   serial confirmations.
+- Task 7c review follow-up separates exact-confirm validity from its possibly
+  empty command body, restoring documented key/reset/selected-slot clear forms,
+  and makes protected pairing CLI output prevalidated, failure-clean, and usable
+  when its local `release` parent does not yet exist. Follow-up review also
+  proves exact modes under restrictive umask and changes final publication to
+  exclusive directory reservation, so raced empty-directory/symlink targets
+  are refused rather than replaced.
 
 ## Latest verification
 
@@ -57,6 +64,9 @@
   MCP tool surface, fixed-base upgrades, bounded device/relay data, nested
   `hookToken` redaction, root staging symlink attacks, character source/output
   limits and semantic rollback, RFID arm origin, and exact confirm parsing.
+- Task 7c review regressions execute empty-body exact-confirm positive/negative
+  parsing plus real pairing CLI success, protected modes, exclusive retry, and
+  precondition-failure cleanup.
 
 ## Pending hardware proof
 

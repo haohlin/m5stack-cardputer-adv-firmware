@@ -6,15 +6,27 @@
 
 int main() {
   const char* confirmed = "write-block 4 00112233445566778899aabbccddeeff confirm";
-  const size_t bodyLength = rfidConfirmedCommandLength(confirmed);
+  size_t bodyLength = 0;
+  assert(rfidConfirmedCommandLength(confirmed, &bodyLength));
   assert(bodyLength == strlen("write-block 4 00112233445566778899aabbccddeeff"));
   assert(strncmp(confirmed, "write-block 4 00112233445566778899aabbccddeeff", bodyLength) == 0);
-  assert(rfidConfirmedCommandLength("write-block 4 00") == 0);
-  assert(rfidConfirmedCommandLength("write-block 4 00 confirmation") == 0);
-  assert(rfidConfirmedCommandLength("write-block 4 00 xconfirm") == 0);
-  assert(rfidConfirmedCommandLength("write-block 4 00 confirm  ") == strlen("write-block 4 00"));
-  assert(rfidConfirmedCommandLength("write 1 confirmation") == 0);
-  assert(rfidConfirmedCommandLength("write 1 xconfirm") == 0);
+  assert(rfidConfirmedCommandLength("confirm", &bodyLength));
+  assert(bodyLength == 0);
+  assert(rfidConfirmedCommandLength("confirm  ", &bodyLength));
+  assert(bodyLength == 0);
+  assert(rfidConfirmedCommandLength("all confirm", &bodyLength));
+  assert(bodyLength == strlen("all"));
+  assert(rfidConfirmedCommandLength("1 confirm", &bodyLength));
+  assert(bodyLength == strlen("1"));
+  assert(!rfidConfirmedCommandLength(nullptr, &bodyLength));
+  assert(!rfidConfirmedCommandLength("", &bodyLength));
+  assert(!rfidConfirmedCommandLength("write-block 4 00", &bodyLength));
+  assert(!rfidConfirmedCommandLength("write-block 4 00 confirmation", &bodyLength));
+  assert(!rfidConfirmedCommandLength("write-block 4 00 xconfirm", &bodyLength));
+  assert(!rfidConfirmedCommandLength("write 1 confirmation", &bodyLength));
+  assert(!rfidConfirmedCommandLength("write 1 xconfirm", &bodyLength));
+  assert(!rfidConfirmedCommandLength("confirm extra", &bodyLength));
+  assert(!rfidConfirmedCommandLength("xconfirm", &bodyLength));
 
   const uint32_t started = 1000;
   const uint32_t deadline = rfidWriteArmDeadline(started);

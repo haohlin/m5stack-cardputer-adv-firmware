@@ -14,8 +14,8 @@ RFID2 = ROOT / "apps" / "rfid2"
 class Rfid2SecurityTests(unittest.TestCase):
     def test_firmware_integrates_security_guards(self):
         source = (RFID2 / "src" / "main.cpp").read_text()
-        self.assertIn("rfidConfirmedCommandLength(command.c_str())", source)
-        self.assertIn("rfidConfirmedCommandLength(tail.c_str())", source)
+        self.assertIn("rfidConfirmedCommandLength(command.c_str(), &confirmedLength)", source)
+        self.assertIn("rfidConfirmedCommandLength(tail.c_str(), &bodyLength)", source)
         self.assertIn("serialDestructiveCardReady(PendingAction::WriteSlot", source)
         self.assertIn("serialDestructiveCardReady(PendingAction::CloneSlot", source)
         self.assertIn("RfidArmOrigin::PhysicalKeyboard", source)
