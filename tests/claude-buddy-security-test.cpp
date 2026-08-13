@@ -60,6 +60,8 @@ int main() {
   assert(buddyBridgeTokenAllowed("Az09_-bcDE12fgHI34jkLM56noPQ78rs"));
   assert(!buddyBridgeTokenAllowed("aaaaaaaaaaaaaaaaaaaaaaaa"));
   assert(!buddyBridgeTokenAllowed("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+  assert(!buddyBridgeTokenAllowed("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"));
+  assert(!buddyBridgeTokenAllowed("01234567890123456789012345678901"));
   assert(!buddyBridgeTokenAllowed("Az09_-bcDE12fgHI34jkLM56noPQ78r+"));
 
   BridgeRecordFixture config = {};

@@ -65,7 +65,7 @@ default_ssid() {
 
 ensure_bridge_config
 
-TOKEN="${CARDPUTER_BRIDGE_TOKEN:-$(node -e 'const fs=require("fs"); const p=process.env.CARDPUTER_BRIDGE_CONFIG || `${process.env.HOME}/.claude-cardputer-bridge/config.json`; process.stdout.write(JSON.parse(fs.readFileSync(p, "utf8")).token || "");')}"
+TOKEN="$(python3 "$ROOT/scripts/bridge_token.py" --config "$BRIDGE_CONFIG")"
 HOOK_PORT="${CARDPUTER_BRIDGE_PORT:-17877}"
 PORT="${CARDPUTER_BRIDGE_DEVICE_PORT:-$((HOOK_PORT + 1))}"
 CA_FILE="${CARDPUTER_BRIDGE_TLS_CA:-}"
@@ -73,10 +73,6 @@ HOST="$(default_host)"
 SSID="$(default_ssid)"
 PASS="${CARDPUTER_WIFI_PASS:-}"
 
-if ! printf '%s' "$TOKEN" | python3 "$ROOT/scripts/bridge_token.py"; then
-  echo "Bridge token must be 32 URL-safe characters provisioned from a CSPRNG." >&2
-  exit 1
-fi
 if [[ -z "$CA_FILE" || ! -f "$CA_FILE" ]]; then
   echo "Set CARDPUTER_BRIDGE_TLS_CA to public PEM CA file used by desktop TLS listener." >&2
   exit 1

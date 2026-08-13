@@ -313,6 +313,7 @@ inline void ownerSet(const char*) {}
 inline const char* ownerName() { return "owner"; }
 
 inline bool fakeBridgeConfigSaved = false;
+inline bool fakeBridgeConfigClearResult = true;
 inline bool bridgeConfigSaveFromFile(const char* path, char* error, size_t errorLength) {
   const std::string contents = LittleFS.readText(path ? path : "");
   const bool valid = !contents.empty() && contents.front() == '{' && contents.back() == '}' &&
@@ -325,4 +326,4 @@ inline bool bridgeConfigSaveFromFile(const char* path, char* error, size_t error
   return valid;
 }
 inline bool bridgeConfigSaveJson(JsonDocument&, char*, size_t) { return true; }
-inline void bridgeConfigClear() {}
+inline bool bridgeConfigClear() { return fakeBridgeConfigClearResult; }

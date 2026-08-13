@@ -22,6 +22,7 @@ const HOOK_HEADERS_TIMEOUT_MS = 10_000;
 const HOOK_KEEP_ALIVE_TIMEOUT_MS = 5_000;
 const HOOK_MAX_CONNECTIONS = 32;
 const HOOK_MAX_REQUESTS_PER_SOCKET = 16;
+const CREDENTIAL_PROVENANCE = "bridge-csprng-v1";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
@@ -42,6 +43,7 @@ interface PersistedConfig {
   devicePort?: number;
   token?: string;
   hookToken?: string;
+  credentialProvenance?: string;
 }
 
 interface PromptDraft { id: string; text: string; source: "keyboard" | "voice"; createdAt: string; }
@@ -60,15 +62,23 @@ function parsePort(value: string | undefined, fallback: number): number {
 function requireStrongToken(value: string, label: string): string {
   let repeated = false;
   for (let period = 1; period <= TOKEN_LENGTH / 2; period += 1) {
-    if (TOKEN_LENGTH % period === 0 && value === value.slice(0, period).repeat(TOKEN_LENGTH / period)) {
+    if ([...value].slice(period).every((character, index) => character === value[index % period])) {
       repeated = true;
       break;
     }
   }
-  if (!TOKEN_PATTERN.test(value) || repeated) {
+  if (!TOKEN_PATTERN.test(value) || /(.)\1{7}/.test(value) || repeated) {
     throw new Error(`${label} must be a ${TOKEN_LENGTH}-character URL-safe token provisioned from a CSPRNG`);
   }
   return value;
+}
+
+function generateToken(): string {
+  for (;;) {
+    const value = randomBytes(24).toString("base64url");
+    try { return requireStrongToken(value, "generated credential"); }
+    catch { /* Generate again if CSPRNG output happens to match a rejected pattern. */ }
+  }
 }
 
 function configPath(): string {
@@ -89,20 +99,24 @@ function writePersisted(path: string, config: PersistedConfig): void {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
+  for (const name of ["CARDPUTER_PAIRING_TOKEN", "CARDPUTER_HOOK_TOKEN"] as const) {
+    if (env[name]?.trim()) {
+      throw new Error(`${name} is not accepted; remove it and use bridge-generated credentials`);
+    }
+  }
   const path = env.CARDPUTER_BRIDGE_CONFIG || configPath();
   const persisted = readPersisted(path);
   const hookPort = parsePort(env.CARDPUTER_BRIDGE_PORT, persisted.hookPort || DEFAULT_HOOK_PORT);
   const defaultDevicePort = hookPort < 65535 ? hookPort + 1 : DEFAULT_HOOK_PORT + 1;
   const devicePort = parsePort(env.CARDPUTER_BRIDGE_DEVICE_PORT, persisted.devicePort || defaultDevicePort);
-  const configuredToken = env.CARDPUTER_PAIRING_TOKEN?.trim();
-  const configuredHookToken = env.CARDPUTER_HOOK_TOKEN?.trim();
-  const token = configuredToken ? requireStrongToken(configuredToken, "CARDPUTER_PAIRING_TOKEN")
-    : persisted.token ? requireStrongToken(persisted.token, "stored pairing token")
-      : randomBytes(24).toString("base64url");
-  const hookToken = configuredHookToken ? requireStrongToken(configuredHookToken, "CARDPUTER_HOOK_TOKEN")
-    : persisted.hookToken ? requireStrongToken(persisted.hookToken, "stored hook token")
-      : randomBytes(24).toString("base64url");
-  writePersisted(path, { hookPort, devicePort, token, hookToken });
+  const generatedByBridge = persisted.credentialProvenance === CREDENTIAL_PROVENANCE;
+  const token = generatedByBridge && persisted.token
+    ? requireStrongToken(persisted.token, "stored pairing token")
+    : generateToken();
+  const hookToken = generatedByBridge && persisted.hookToken
+    ? requireStrongToken(persisted.hookToken, "stored hook token")
+    : generateToken();
+  writePersisted(path, { hookPort, devicePort, token, hookToken, credentialProvenance: CREDENTIAL_PROVENANCE });
   return {
     hookPort,
     devicePort,

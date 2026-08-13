@@ -41,7 +41,11 @@ CARDPUTER_WIFI_ON_DEVICE=1 \
 The serial command sends `wss://<host>:<device-port>/device`, a high-entropy
 pairing token, and public CA. Use the bridge-generated 32-character URL-safe
 token, which comes from 24 CSPRNG bytes; a long or human-chosen value is not
-accepted merely because of length, and input validation cannot prove entropy.
+accepted through credential environment variables. Start the bridge first if an
+old config lacks its generation marker; both credentials rotate once. Firmware
+pattern validation is defense for untrusted BLE/file parsing and cannot prove
+entropy. Provisioning assumes the BLE/USB config setter is under trusted physical
+control and the desktop bridge is the CSPRNG authority.
 It disarms Wi-Fi before replacing config. Firmware commits endpoint, token, CA,
 and Wi-Fi state as one checksummed NVS record, so an interrupted replacement
 cannot activate mixed old/new authority. Use device UI to enter Wi-Fi credentials
@@ -55,7 +59,8 @@ curl -fsS http://127.0.0.1:17877/health
 
 Health intentionally contains only service status and ports. `/hook` requires
 local bearer credential and is not a LAN service. Claude plugin relay reads this
-credential from protected local bridge config; do not copy it into logs.
+credential only from the marked, mode-protected local bridge config; do not copy
+it into logs.
 The listener enforces a 15-second request timeout, 10-second header timeout,
 5-second keep-alive timeout, 32-connection cap, 16 requests per socket, and the
 existing 32 KiB body cap.

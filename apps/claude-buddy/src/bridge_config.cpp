@@ -242,18 +242,19 @@ bool bridgeConfigSaveWifi(const char* ssid, const char* pass, char* error, size_
   return true;
 }
 
-void bridgeConfigClear() {
+bool bridgeConfigClear() {
   Preferences prefs;
-  if (!prefs.begin("buddy", false)) return;
+  if (!prefs.begin("buddy", false)) return false;
   const bool hadRecord = prefs.isKey(kBridgeRecordKey);
   const bool invalidated = !hadRecord || prefs.remove(kBridgeRecordKey);
   if (!invalidated) {
     prefs.end();
-    return;
+    return false;
   }
   removeLegacyBridgeKeys(prefs);
   prefs.end();
   memset(&_cfg, 0, sizeof(_cfg));
   _cfg.port = 17878;
   bump();
+  return true;
 }

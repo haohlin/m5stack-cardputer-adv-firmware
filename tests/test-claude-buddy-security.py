@@ -72,13 +72,29 @@ class ClaudeBuddySecurityTests(unittest.TestCase):
         self.assertTrue(helper.bridge_token_allowed("Az09_-bcDE12fgHI34jkLM56noPQ78rs"))
         self.assertFalse(helper.bridge_token_allowed("a" * 24))
         self.assertFalse(helper.bridge_token_allowed("a" * 32))
+        self.assertFalse(helper.bridge_token_allowed("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"))
+        self.assertFalse(helper.bridge_token_allowed("01234567890123456789012345678901"))
         self.assertFalse(helper.bridge_token_allowed("Az09_-bcDE12fgHI34jkLM56noPQ78r+"))
         serial = (BUDDY / "scripts" / "write_bridge_config_serial.sh").read_text()
         folder = (BUDDY / "scripts" / "write_bridge_config_folder.sh").read_text()
         header = (BUDDY / "scripts" / "write_bridge_config_header.sh").read_text()
-        self.assertIn("bridge_token_allowed(token)", serial)
+        self.assertIn("load_bridge_token(path)", serial)
         self.assertIn('bridge_token.py"', folder)
         self.assertIn('bridge_token.py"', header)
+        with tempfile.TemporaryDirectory() as tmp:
+            marked = Path(tmp) / "marked.json"
+            marked.write_text(json.dumps({
+                "credentialProvenance": "bridge-csprng-v1",
+                "token": "Az09_-bcDE12fgHI34jkLM56noPQ78rs",
+            }))
+            self.assertEqual(
+                helper.load_bridge_token(marked),
+                "Az09_-bcDE12fgHI34jkLM56noPQ78rs",
+            )
+            legacy = Path(tmp) / "legacy.json"
+            legacy.write_text(json.dumps({"token": "Az09_-bcDE12fgHI34jkLM56noPQ78rs"}))
+            with self.assertRaisesRegex(ValueError, "bridge-generated provenance"):
+                helper.load_bridge_token(legacy)
 
     def test_prep_rejects_manifest_name_outside_output_root(self):
         prep = load_module("prep_character", BUDDY / "tools" / "prep_character.py")

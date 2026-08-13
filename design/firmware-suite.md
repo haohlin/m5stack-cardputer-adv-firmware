@@ -67,10 +67,13 @@ outside normal app OTA path.
   output within the destination buffer.
 - Optional Wi-Fi bridge splits loopback-only HTTP health/hooks from separate
   TLS WebSocket device listener. Hook/device use independent 32-character
-  URL-safe bearer credentials generated from 24 CSPRNG bytes. Configured values
-  must have the same shape and cannot be exact repeated patterns, but validation
-  cannot prove human-supplied entropy: operators must provision them from a
-  CSPRNG. Hook input, pending questions, and timeouts are bounded before parsing.
+  URL-safe bearer credentials generated from 24 CSPRNG bytes by the desktop
+  bridge. Caller-provided credential environment variables are rejected, and
+  pre-provenance config files rotate once before they can be provisioned. The
+  firmware's format, long-run, and short-period checks are parsing defenses for
+  untrusted BLE/file input; they do not prove entropy. Normal provisioning trusts
+  a physically controlled BLE/USB setter and the desktop bridge as CSPRNG
+  authority. Hook input, pending questions, and timeouts are bounded before parsing.
   Hook HTTP uses 15-second request, 10-second header, and 5-second keep-alive
   timeouts, at most 32 connections, and 16 requests per socket. Health exposes
   no summary, device state, or device identity.
@@ -82,7 +85,8 @@ outside normal app OTA path.
 - Firmware persists the complete bridge structure in one versioned, checksummed
   NVS blob. Endpoint, bearer token, CA, and Wi-Fi fields never gain authority as
   separate keys; malformed or incomplete blobs fail closed. Successful blob
-  commit precedes legacy-key cleanup, and clear invalidates the blob first.
+  commit precedes legacy-key cleanup. Forget reports success and disarms Wi-Fi
+  only after persistent blob removal succeeds.
 - Character packs stage in reserved LittleFS. Transfer abort, timeout,
   malformed input, and incomplete content retain active character; only fully
   received/parsed pack replaces it. ZIP prep bounds members, compressed and

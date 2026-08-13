@@ -60,17 +60,21 @@ constexpr size_t BUDDY_BRIDGE_TOKEN_CHARS = 32;
 
 inline bool buddyBridgeTokenAllowed(const char* token) {
   if (!token || strlen(token) != BUDDY_BRIDGE_TOKEN_CHARS) return false;
+  size_t run = 1;
   for (size_t i = 0; i < BUDDY_BRIDGE_TOKEN_CHARS; ++i) {
     const char c = token[i];
     const bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                       (c >= '0' && c <= '9') || c == '-' || c == '_';
     if (!safe) return false;
+    if (i > 0) {
+      run = token[i] == token[i - 1] ? run + 1 : 1;
+      if (run >= 8) return false;
+    }
   }
 
-  // Reject tokens made by repeating any smaller exact unit. This catches
-  // obvious configured placeholders; callers still must provision via CSPRNG.
+  // Reject high-signal placeholder patterns. These checks only defend parsing;
+  // they cannot establish entropy, so trusted callers must still use a CSPRNG.
   for (size_t period = 1; period <= BUDDY_BRIDGE_TOKEN_CHARS / 2; ++period) {
-    if (BUDDY_BRIDGE_TOKEN_CHARS % period != 0) continue;
     bool repeated = true;
     for (size_t i = period; i < BUDDY_BRIDGE_TOKEN_CHARS; ++i) {
       if (token[i] != token[i % period]) {

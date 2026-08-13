@@ -202,7 +202,10 @@ inline bool xferCommand(JsonDocument& doc) {
   }
 
   if (strcmp(cmd, "bridge_forget") == 0) {
-    bridgeConfigClear();
+    if (!bridgeConfigClear()) {
+      _xAckError("bridge_forget", "NVS clear failed");
+      return true;
+    }
     settings().wifi = false;
     settingsSave();
     _xAck("bridge_forget", true);

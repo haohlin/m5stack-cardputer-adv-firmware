@@ -568,11 +568,14 @@ static void applyWifiConfig(uint8_t idx) {
     } else if (idx == 1) {
       wifiStartInput();
     } else if (idx == 2) {
-      bridgeConfigClear();
-      s.wifi = false;
-      settingsSave();
-      wifiRuntimeDisarm();
-      wifiCfgSel = 0;
+      if (bridgeConfigClear()) {
+        s.wifi = false;
+        settingsSave();
+        wifiRuntimeDisarm();
+        wifiCfgSel = 0;
+      } else {
+        wifiCfgToast("forget failed");
+      }
     } else {
       closeWifiConfig();
     }
@@ -580,11 +583,14 @@ static void applyWifiConfig(uint8_t idx) {
     if (idx == 0) {
       wifiStartInput();
     } else if (idx == 1) {
-      bridgeConfigClear();
-      s.wifi = false;
-      settingsSave();
-      wifiRuntimeDisarm();
-      wifiCfgSel = 0;
+      if (bridgeConfigClear()) {
+        s.wifi = false;
+        settingsSave();
+        wifiRuntimeDisarm();
+        wifiCfgSel = 0;
+      } else {
+        wifiCfgToast("forget failed");
+      }
     } else {
       closeWifiConfig();
     }

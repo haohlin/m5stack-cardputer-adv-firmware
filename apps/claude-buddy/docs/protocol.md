@@ -31,10 +31,13 @@ upgrade. Firmware uses CA-validated `beginSslWithCA`; it never enables insecure
 TLS mode.
 
 Pairing and hook tokens are exactly 32 URL-safe Base64 characters
-(`[A-Za-z0-9_-]`), matching encoding of 24 CSPRNG bytes. Configured tokens also
-reject exact repeated patterns. These shape checks do not prove entropy in an
-arbitrary human-supplied value; use bridge-generated credentials or another
-CSPRNG, never a memorable phrase or repeated placeholder.
+(`[A-Za-z0-9_-]`), matching encoding of 24 CSPRNG bytes. The desktop bridge is
+the credential authority: it rejects caller-provided pairing/hook token
+environment variables, marks generated credentials in its mode-`0600` config,
+and rotates any pre-marker config once. Firmware rejects malformed, long-run,
+and short-period token patterns as defense for untrusted BLE/file parsing. Those
+heuristics do not prove entropy. Provisioning assumes a trusted physical BLE/USB
+config setter and must use the desktop-generated credential.
 
 Firmware persists one versioned, checksummed NVS record containing the entire
 bridge configuration. It never loads legacy endpoint/token/CA fields separately.
@@ -52,12 +55,14 @@ Desktop service separates local HTTP from network device transport:
   bearer token and never accepts token query parameters.
 
 The bridge limits pending Cardputer questions to eight and each request timeout
-to at most 300 seconds. The local relay discovers hook credential only from
-configured environment or protected local bridge config and does not log it.
+to at most 300 seconds. The local relay discovers the hook credential only from
+the marked, mode-protected local bridge config and does not log it.
 
 Provision over USB serial or a `bridge-config` folder only after desktop TLS
 certificate, private key, and public CA have been set. Pairing config contains
-public CA, not private key. Existing bridge configs must be regenerated.
+public CA, not private key. Start the bridge once to rotate a legacy pre-marker
+config before provisioning it. A failed persistent forget returns an error and
+keeps the active Wi-Fi/config state; success disarms Wi-Fi.
 
 ## At-rest credentials
 

@@ -1,10 +1,20 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const eventName = process.argv[2] || "Hook";
+const credentialProvenance = "bridge-csprng-v1";
+const tokenPattern = /^[A-Za-z0-9_-]{32}$/;
+
+function tokenAllowed(value) {
+  if (!tokenPattern.test(value) || /(.)\1{7}/.test(value)) return false;
+  for (let period = 1; period <= value.length / 2; period += 1) {
+    if ([...value].slice(period).every((character, index) => character === value[index % period])) return false;
+  }
+  return true;
+}
 
 export function localBridgeUrl(raw) {
   try {
@@ -34,17 +44,22 @@ async function readStdin() {
   }
 }
 
-function hookToken() {
-  const configured = process.env.CARDPUTER_HOOK_TOKEN?.trim();
-  if (configured && configured.length >= 24) return configured;
-  const path = process.env.CARDPUTER_BRIDGE_CONFIG || join(homedir(), ".claude-cardputer-bridge", "config.json");
+export function storedHookToken(path) {
   if (!existsSync(path)) return null;
   try {
-    const value = JSON.parse(readFileSync(path, "utf8")).hookToken;
-    return typeof value === "string" && value.length >= 24 ? value : null;
+    if ((statSync(path).mode & 0o077) !== 0) return null;
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    if (config.credentialProvenance !== credentialProvenance) return null;
+    const value = config.hookToken;
+    return typeof value === "string" && tokenAllowed(value) ? value : null;
   } catch {
     return null;
   }
+}
+
+function hookToken() {
+  const path = process.env.CARDPUTER_BRIDGE_CONFIG || join(homedir(), ".claude-cardputer-bridge", "config.json");
+  return storedHookToken(path);
 }
 
 async function main() {

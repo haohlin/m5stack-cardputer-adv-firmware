@@ -28,6 +28,7 @@ void resetHarness() {
   fakeSerialOutput.clear();
   fakeSettings = FakeSettings{};
   fakeBridgeConfigSaved = false;
+  fakeBridgeConfigClearResult = true;
 }
 
 bool ackIs(const char* command, bool ok) {
@@ -215,6 +216,21 @@ bool testValidBridgeConfigStillSaves() {
   return true;
 }
 
+bool testBridgeForgetOnlyDisarmsWifiAfterPersistentClear() {
+  resetHarness();
+  fakeBridgeConfigClearResult = false;
+  auto forget = command("bridge_forget");
+  send(forget);
+  CHECK(ackIs("bridge_forget", false));
+  CHECK(settings().wifi);
+
+  fakeBridgeConfigClearResult = true;
+  send(forget);
+  CHECK(ackIs("bridge_forget", true));
+  CHECK(!settings().wifi);
+  return true;
+}
+
 bool testInsecureOrPartialBridgeConfigIsRejected() {
   const char* payloads[] = {
       "eyJlbmRwb2ludCI6IndzOi8vaC9kZXZpY2UiLCJ0b2tlbiI6IjAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMyIsImNhIjoiLS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0teC0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0ifQ==",
@@ -295,6 +311,7 @@ int main() {
       {"incomplete replacement preserves active character", testIncompleteReplacementKeepsActiveCharacter},
       {"completed replacement commits staged character", testCompletedReplacementCommitsStagedCharacter},
       {"valid bridge config", testValidBridgeConfigStillSaves},
+      {"bridge forget persistence", testBridgeForgetOnlyDisarmsWifiAfterPersistentClear},
       {"insecure or partial bridge config", testInsecureOrPartialBridgeConfigIsRejected},
   };
 

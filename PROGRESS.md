@@ -29,6 +29,10 @@
   stores complete bridge state in one crash-atomic NVS record, binds serial
   write/clone to the armed card identity, and bounds loopback hook listener
   timeouts, connections, and requests per socket.
+- Task 7b review follow-up makes the desktop bridge the sole credential
+  generator, rotates unmarked legacy credentials once, rejects caller token
+  environment variables and high-signal placeholder patterns, and reports
+  bridge forget success only after persistent removal.
 
 ## Latest verification
 

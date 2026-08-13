@@ -39,13 +39,15 @@ CARDPUTER_BRIDGE_TLS_CA=/private/path/bridge-ca.pem \
 ./apps/claude-buddy/scripts/write_bridge_config_folder.sh
 ```
 
-The bridge generates independent pairing and hook credentials when omitted,
-persists them in `~/.claude-cardputer-bridge/config.json` mode `0600`, and
-never prints them. Plugin relay reads only local hook credential from this file.
-Each token encodes 24 CSPRNG bytes as exactly 32 URL-safe characters. Explicit
-tokens must use the same shape and cannot be an exact repeated pattern. Shape
-validation cannot establish human-supplied entropy; provision explicit values
-with a CSPRNG.
+The bridge is the sole credential authority. It generates independent pairing
+and hook credentials from 24 CSPRNG bytes, encodes each as exactly 32 URL-safe
+characters, marks their provenance, persists them in
+`~/.claude-cardputer-bridge/config.json` mode `0600`, and never prints them.
+Nonblank `CARDPUTER_PAIRING_TOKEN` or `CARDPUTER_HOOK_TOKEN` values fail startup.
+A pre-marker config rotates both credentials once, so re-provision the device.
+Plugin relay reads the hook credential only from the marked mode-protected file.
+Firmware pattern checks protect untrusted BLE/file parsing but cannot prove
+entropy; physical BLE/USB provisioning must be trusted and use bridge output.
 
 Loopback hook admission uses a 15-second request timeout, 10-second header
 timeout, 5-second keep-alive timeout, 32-connection cap, 16 requests per socket,

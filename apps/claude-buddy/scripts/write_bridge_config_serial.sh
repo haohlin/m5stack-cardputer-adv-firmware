@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[2])
-from bridge_token import bridge_token_allowed
+from bridge_token import load_bridge_token
 
 try:
     import serial
@@ -47,23 +47,19 @@ def default_host() -> str:
 
 
 def load_token() -> str:
-    if os.environ.get("CARDPUTER_BRIDGE_TOKEN"):
-        token = os.environ["CARDPUTER_BRIDGE_TOKEN"]
-    else:
-        path = Path(os.environ.get(
-            "CARDPUTER_BRIDGE_CONFIG",
-            str(Path.home() / ".claude-cardputer-bridge" / "config.json"),
-        ))
-        if not path.exists():
-            print(f"[ERROR] Bridge config not found: {path}", file=sys.stderr)
-            print("Start the desktop bridge once or set CARDPUTER_BRIDGE_TOKEN.", file=sys.stderr)
-            sys.exit(1)
-        data = json.loads(path.read_text())
-        token = data.get("token", "")
-    if not bridge_token_allowed(token):
-        print("[ERROR] Bridge token must be 32 URL-safe characters provisioned from a CSPRNG.", file=sys.stderr)
+    path = Path(os.environ.get(
+        "CARDPUTER_BRIDGE_CONFIG",
+        str(Path.home() / ".claude-cardputer-bridge" / "config.json"),
+    ))
+    if not path.exists():
+        print(f"[ERROR] Bridge config not found: {path}", file=sys.stderr)
+        print("Start the desktop bridge once to generate credentials.", file=sys.stderr)
         sys.exit(1)
-    return token
+    try:
+        return load_bridge_token(path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 port = sys.argv[1]

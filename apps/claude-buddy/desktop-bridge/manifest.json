@@ -25,8 +25,6 @@
         "CARDPUTER_BRIDGE_BIND_HOST": "${user_config.bind_host}",
         "CARDPUTER_BRIDGE_DEVICE_BIND_HOST": "${user_config.device_bind_host}",
         "CARDPUTER_BRIDGE_DEVICE_PORT": "${user_config.device_port}",
-        "CARDPUTER_PAIRING_TOKEN": "${user_config.pairing_token}",
-        "CARDPUTER_HOOK_TOKEN": "${user_config.hook_token}",
         "CARDPUTER_BRIDGE_TLS_CERT": "${user_config.tls_cert_path}",
         "CARDPUTER_BRIDGE_TLS_KEY": "${user_config.tls_key_path}",
         "CARDPUTER_BRIDGE_TLS_CA": "${user_config.tls_ca_path}",
@@ -62,20 +60,6 @@
       "default": 17877,
       "min": 1024,
       "max": 65535,
-      "required": false
-    },
-    "pairing_token": {
-      "type": "string",
-      "title": "Pairing Token",
-      "description": "Optional 32-character URL-safe token from a CSPRNG. Leave blank to let the bridge generate and persist one locally.",
-      "sensitive": true,
-      "required": false
-    },
-    "hook_token": {
-      "type": "string",
-      "title": "Hook Token",
-      "description": "Optional 32-character URL-safe CSPRNG token for localhost hooks. Leave blank to generate and persist one locally.",
-      "sensitive": true,
       "required": false
     },
     "bind_host": {

@@ -23,4 +23,4 @@ bool bridgeConfigSave(const BridgeStoredConfig& cfg);
 bool bridgeConfigSaveJson(JsonDocument& doc, char* error, size_t errorLen);
 bool bridgeConfigSaveFromFile(const char* path, char* error, size_t errorLen);
 bool bridgeConfigSaveWifi(const char* ssid, const char* pass, char* error, size_t errorLen);
-void bridgeConfigClear();
+bool bridgeConfigClear();

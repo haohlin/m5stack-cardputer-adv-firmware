@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { CardputerBridge, loadConfig } from "../dist/index.js";
-import { localBridgeUrl } from "../../claude-plugin/hooks/relay.mjs";
+import { localBridgeUrl, storedHookToken } from "../../claude-plugin/hooks/relay.mjs";
 
 const strong = "Az09_-bcDE12fgHI34jkLM56noPQ78rs";
+const provenance = "bridge-csprng-v1";
+const reviewerTokens = [
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+  "01234567890123456789012345678901"
+];
 
 function tempConfig() {
   const dir = mkdtempSync(join(tmpdir(), "cardputer-bridge-test-"));
@@ -25,17 +30,15 @@ async function unusedLoopbackPort() {
   });
 }
 
-test("configured credentials require generated-token shape and reject repeated input", () => {
-  const configured = tempConfig();
-  const loaded = loadConfig({
-    CARDPUTER_BRIDGE_CONFIG: configured,
-    CARDPUTER_PAIRING_TOKEN: strong,
-    CARDPUTER_HOOK_TOKEN: strong.split("").reverse().join("")
-  });
-  assert.equal(loaded.token, strong);
-  assert.throws(() => loadConfig({ CARDPUTER_BRIDGE_CONFIG: tempConfig(), CARDPUTER_PAIRING_TOKEN: "a".repeat(24) }), /32-character URL-safe/);
-  assert.throws(() => loadConfig({ CARDPUTER_BRIDGE_CONFIG: tempConfig(), CARDPUTER_PAIRING_TOKEN: "a".repeat(32) }), /32-character URL-safe/);
-  assert.throws(() => loadConfig({ CARDPUTER_BRIDGE_CONFIG: tempConfig(), CARDPUTER_HOOK_TOKEN: `${strong.slice(0, 31)}+` }), /32-character URL-safe/);
+test("rejects every nonblank caller-provided token environment variable", () => {
+  for (const name of ["CARDPUTER_PAIRING_TOKEN", "CARDPUTER_HOOK_TOKEN"]) {
+    for (const value of reviewerTokens) {
+      assert.throws(
+        () => loadConfig({ CARDPUTER_BRIDGE_CONFIG: tempConfig(), [name]: value }),
+        new RegExp(`${name} is not accepted`)
+      );
+    }
+  }
 });
 
 test("generated credentials use 24 CSPRNG bytes encoded as 32 URL-safe characters", () => {
@@ -44,8 +47,33 @@ test("generated credentials use 24 CSPRNG bytes encoded as 32 URL-safe character
   assert.match(loaded.token, /^[A-Za-z0-9_-]{32}$/);
   assert.match(loaded.hookToken, /^[A-Za-z0-9_-]{32}$/);
   const persisted = JSON.parse(readFileSync(config, "utf8"));
+  assert.equal(persisted.credentialProvenance, provenance);
   assert.equal(persisted.token, loaded.token);
   assert.equal(persisted.hookToken, loaded.hookToken);
+});
+
+test("rotates pre-marker credentials once and then preserves generated credentials", () => {
+  const config = tempConfig();
+  writeFileSync(config, `${JSON.stringify({
+    hookPort: 18100,
+    devicePort: 18101,
+    token: reviewerTokens[0],
+    hookToken: reviewerTokens[1]
+  })}\n`, { mode: 0o600 });
+
+  const rotated = loadConfig({ CARDPUTER_BRIDGE_CONFIG: config });
+  assert.equal(rotated.hookPort, 18100);
+  assert.equal(rotated.devicePort, 18101);
+  assert.match(rotated.token, /^[A-Za-z0-9_-]{32}$/);
+  assert.match(rotated.hookToken, /^[A-Za-z0-9_-]{32}$/);
+  assert.notEqual(rotated.token, reviewerTokens[0]);
+  assert.notEqual(rotated.hookToken, reviewerTokens[1]);
+  const stored = JSON.parse(readFileSync(config, "utf8"));
+  assert.equal(stored.credentialProvenance, provenance);
+
+  const reloaded = loadConfig({ CARDPUTER_BRIDGE_CONFIG: config });
+  assert.equal(reloaded.token, rotated.token);
+  assert.equal(reloaded.hookToken, rotated.hookToken);
 });
 
 test("persists generated credentials 0600 and keeps hook traffic loopback", () => {
@@ -55,6 +83,21 @@ test("persists generated credentials 0600 and keeps hook traffic loopback", () =
   assert.equal(localBridgeUrl("http://127.0.0.1:17877"), "http://127.0.0.1:17877");
   assert.equal(localBridgeUrl("https://127.0.0.1:17877"), null);
   assert.equal(localBridgeUrl("http://bridge.example:17877"), null);
+});
+
+test("relay reads hook credential only from marked protected bridge config", () => {
+  const marked = tempConfig();
+  writeFileSync(marked, `${JSON.stringify({ credentialProvenance: provenance, hookToken: strong })}\n`, { mode: 0o600 });
+  assert.equal(storedHookToken(marked), strong);
+
+  const legacy = tempConfig();
+  writeFileSync(legacy, `${JSON.stringify({ hookToken: strong })}\n`, { mode: 0o600 });
+  assert.equal(storedHookToken(legacy), null);
+
+  const exposed = tempConfig();
+  writeFileSync(exposed, `${JSON.stringify({ credentialProvenance: provenance, hookToken: strong })}\n`, { mode: 0o600 });
+  chmodSync(exposed, 0o644);
+  assert.equal(storedHookToken(exposed), null);
 });
 
 test("hook requires credential, bounds body, and health omits content", async () => {
