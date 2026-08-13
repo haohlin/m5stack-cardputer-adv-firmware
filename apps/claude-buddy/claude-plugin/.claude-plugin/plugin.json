@@ -1,0 +1,14 @@
+{
+  "name": "claude-cardputer",
+  "version": "0.1.0",
+  "description": "Claude Code/Cowork hooks and skills for the M5Stack Cardputer ADV console.",
+  "author": {
+    "name": "Haohan Lin"
+  },
+  "repository": "https://github.com/haohlin/claude-desktop-buddy-m5stack-cardputer-adv",
+  "license": "MIT",
+  "keywords": ["claude", "m5stack", "cardputer", "hardware-buddy"],
+  "commands": [
+    "./commands/cardputer-summary.md"
+  ]
+}

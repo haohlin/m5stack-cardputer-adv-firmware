@@ -1,0 +1,15 @@
+.pio/
+.venv/
+.vscode/
+.DS_Store
+data/
+get-platformio.py
+release/
+src/bridge_config.local.h
+desktop-bridge/node_modules/
+desktop-bridge/dist/
+desktop-bridge/*.mcpb
+claude-plugin/*.zip
+graphify-out/cache/
+graphify-out/.rebuild.lock
+reference/vendor/

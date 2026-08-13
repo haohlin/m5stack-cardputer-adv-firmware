@@ -1,0 +1,91 @@
+{
+  "$schema": "https://github.com/modelcontextprotocol/mcpb/raw/main/dist/mcpb-manifest.schema.json",
+  "manifest_version": "0.3",
+  "name": "claude-cardputer-bridge",
+  "display_name": "Claude Cardputer Bridge",
+  "version": "0.1.0",
+  "description": "Local bridge between Claude and an M5Stack Cardputer ADV console.",
+  "long_description": "Runs a local MCP server plus localhost WebSocket bridge for optional Cardputer ADV features that are outside the official Claude Hardware Buddy BLE protocol.",
+  "author": {
+    "name": "Haohan Lin"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haohlin/claude-desktop-buddy-m5stack-cardputer-adv"
+  },
+  "homepage": "https://github.com/haohlin/claude-desktop-buddy-m5stack-cardputer-adv",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "CARDPUTER_BRIDGE_PORT": "${user_config.bridge_port}",
+        "CARDPUTER_BRIDGE_BIND_HOST": "${user_config.bind_host}",
+        "CARDPUTER_PAIRING_TOKEN": "${user_config.pairing_token}",
+        "CARDPUTER_VERBOSE": "${user_config.verbose_logging}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "notify_cardputer",
+      "description": "Send a concise status or summary to the connected Cardputer."
+    },
+    {
+      "name": "ask_cardputer",
+      "description": "Ask the Cardputer user a short question and wait for an answer."
+    },
+    {
+      "name": "get_cardputer_prompt",
+      "description": "Read the next prompt draft queued from the Cardputer."
+    },
+    {
+      "name": "device_status",
+      "description": "Report bridge and Cardputer connection status."
+    }
+  ],
+  "keywords": ["claude", "m5stack", "cardputer", "hardware-buddy", "mcp"],
+  "license": "MIT",
+  "user_config": {
+    "bridge_port": {
+      "type": "number",
+      "title": "Bridge Port",
+      "description": "Localhost HTTP/WebSocket port for the Cardputer bridge.",
+      "default": 17877,
+      "min": 1024,
+      "max": 65535,
+      "required": false
+    },
+    "pairing_token": {
+      "type": "string",
+      "title": "Pairing Token",
+      "description": "Optional shared token. Leave blank to let the bridge generate and persist one locally.",
+      "sensitive": true,
+      "required": false
+    },
+    "bind_host": {
+      "type": "string",
+      "title": "Bind Host",
+      "description": "Network interface for the local bridge. Use 127.0.0.1 for Desktop-only use, or 0.0.0.0 for physical Cardputer Wi-Fi testing on your LAN.",
+      "default": "127.0.0.1",
+      "required": false
+    },
+    "verbose_logging": {
+      "type": "boolean",
+      "title": "Verbose Logging",
+      "description": "Print extra bridge diagnostics to stderr.",
+      "default": false,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "privacy_policies": []
+}
