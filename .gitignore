@@ -3,3 +3,5 @@
 .venv/
 dist/
 .cardputer-sd/
+.worktrees/
+__pycache__/

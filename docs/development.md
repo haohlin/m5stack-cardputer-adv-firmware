@@ -1,4 +1,4 @@
-# Cardputer development, debugging, and deployment
+# M5Stack Cardputer ADV Firmware development
 
 `apps/rfid2` and `apps/claude-buddy` are independent PlatformIO projects. Each
 owns its source, `platformio.ini`, libraries, `.venv`, `.pio`, and release
@@ -47,3 +47,11 @@ identity, BLE advertising/pairing, and one permission-prompt path.
 merged-image tooling. Recovery only; never routine install flow. If Launcher is
 wiped, restore it from pinned external source, then re-check `launcher.lock`
 before staging apps.
+
+## Versioning
+
+Read [`../VERSIONING.md`](../VERSIONING.md) before release. New tags are
+app-namespaced: `rfid2-vX.Y.Z` and `claude-buddy-vX.Y.Z`.
+`claude-buddy-v1.3.0` is historical raw-source provenance, not a Launcher
+release. `claude-buddy-v1.4.0` is the first Launcher release and requires
+physical Launcher-installed proof before tagging.
