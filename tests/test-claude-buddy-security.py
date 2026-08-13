@@ -24,6 +24,28 @@ def load_module(name: str, path: Path):
 
 
 class ClaudeBuddySecurityTests(unittest.TestCase):
+    def test_character_transfer_failure_paths_cleanup_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "claude-buddy-xfer-security-test"
+            subprocess.run(
+                [
+                    "c++",
+                    "-std=c++17",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-I",
+                    str(ROOT / "tests"),
+                    "-I",
+                    str(BUDDY / "src"),
+                    str(ROOT / "tests" / "claude-buddy-xfer-security-test.cpp"),
+                    "-o",
+                    str(binary),
+                ],
+                check=True,
+            )
+            subprocess.run([str(binary)], check=True)
+
     def test_embedded_security_helpers_enforce_bounds(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "claude-buddy-security-test"

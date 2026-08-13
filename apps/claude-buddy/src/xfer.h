@@ -1,4 +1,7 @@
 #pragma once
+#ifdef BUDDY_XFER_HOST_TEST
+#include "claude-buddy-xfer-host-stubs.h"
+#else
 #include <Arduino.h>
 #include <LittleFS.h>
 #include "ble_bridge.h"
@@ -6,6 +9,7 @@
 #include <ArduinoJson.h>
 #include "safe_serial.h"
 #include "bridge_config.h"
+#endif
 
 #ifndef CARDPUTER_FW_TAG
 #define CARDPUTER_FW_TAG "adv-dev-bridge-serial"
@@ -20,6 +24,8 @@ static bool     _xBridgeConfig = false;
 static bool     _xFailed = false;
 static uint32_t _xTotal = 0, _xTotalWritten = 0;
 static uint32_t _xLastActivityMs = 0;
+static constexpr uint32_t XFER_BRIDGE_CONFIG_MAX_BYTES = 4096;
+static constexpr uint32_t XFER_FILESYSTEM_RESERVE_BYTES = 4096;
 
 // Ack goes to both streams — we don't track which one delivered the command,
 // and writes to a clientless SerialBT just drop. The bridge listens on
@@ -39,12 +45,6 @@ static void _xAckError(const char* what, const char* error) {
   bleWrite((const uint8_t*)b, len);
 }
 
-static bool _xSafePath(const char* path) {
-  if (!path || !path[0] || path[0] == '/') return false;
-  if (strstr(path, "..")) return false;
-  return strlen(path) < 48;
-}
-
 static uint32_t _xWipeDir(const char* dir) {
   File d = LittleFS.open(dir);
   if (!d || !d.isDirectory()) { LittleFS.mkdir(dir); return 0; }
@@ -60,6 +60,11 @@ static uint32_t _xWipeDir(const char* dir) {
   }
   d.close();
   return freed;
+}
+
+static void _xWipeBridgeStaging() {
+  _xWipeDir("/bridge");
+  LittleFS.rmdir("/bridge");
 }
 
 static bool _xLooksBridgeConfigName(const char* name) {
@@ -106,7 +111,7 @@ static void _xAbortTransfer() {
   if (_xFile) _xFile.close();
   _xFile = File();
   if (_xBridgeConfig) {
-    _xWipeDir("/bridge");
+    _xWipeBridgeStaging();
   } else if (buddySafePathComponent(_xCharName, sizeof(_xCharName))) {
     char dir[48];
     snprintf(dir, sizeof(dir), "/characters/%s", _xCharName);
@@ -127,8 +132,10 @@ void petNameSet(const char* name);
 const char* petName();
 void ownerSet(const char* name);
 const char* ownerName();
+#ifndef BUDDY_XFER_HOST_TEST
 #include "stats.h"
 #include "hal.h"
+#endif
 
 static bool _xSaveBridgeConfigFile(const char* path, char* err, size_t errLen) {
   bool ok = bridgeConfigSaveFromFile(path, err, errLen);
@@ -239,6 +246,15 @@ inline bool xferCommand(JsonDocument& doc) {
     _xBridgeConfig = _xLooksBridgeConfigName(name);
 
     if (_xBridgeConfig) {
+      const uint32_t totalBytes = LittleFS.totalBytes();
+      const uint32_t usedBytes = LittleFS.usedBytes();
+      const uint32_t available = usedBytes <= totalBytes ? totalBytes - usedBytes : 0;
+      if (_xTotal > XFER_BRIDGE_CONFIG_MAX_BYTES ||
+          !buddyTransferFits(_xTotal, available, XFER_FILESYSTEM_RESERVE_BYTES)) {
+        _xBridgeConfig = false;
+        _xAck("char_begin", false);
+        return true;
+      }
       snprintf(_xCharName, sizeof(_xCharName), "%s", "bridge-config");
       _xWipeDir("/bridge");
       LittleFS.mkdir("/bridge");
@@ -273,7 +289,7 @@ inline bool xferCommand(JsonDocument& doc) {
     }
     // Headroom for LittleFS metadata overhead — it's not byte-for-byte.
     uint32_t available = free + reclaimable;
-    if (!buddyTransferFits(_xTotal, available, 4096)) {
+    if (!buddyTransferFits(_xTotal, available, XFER_FILESYSTEM_RESERVE_BYTES)) {
       char b[96];
       int len = snprintf(b, sizeof(b),
         "{\"ack\":\"char_begin\",\"ok\":false,\"n\":%lu,\"error\":\"need %luK, have %luK\"}\n",
@@ -315,6 +331,11 @@ inline bool xferCommand(JsonDocument& doc) {
     }
     char full[80];
     if (!_xBridgeConfig && _xIsBridgeJsonPath(path)) {
+      if (_xTotal > XFER_BRIDGE_CONFIG_MAX_BYTES) {
+        _xAbortTransfer();
+        _xAck("file", false);
+        return true;
+      }
       _xBridgeConfig = true;
       _xWipeDir("/bridge");
       LittleFS.mkdir("/bridge");
@@ -375,12 +396,15 @@ inline bool xferCommand(JsonDocument& doc) {
         return true;
       }
       _xActive = false;
-      _xBridgeConfig = false;
       char err[48] = "";
       ok = _xSaveBridgeConfigFile("/bridge/bridge.json", err, sizeof(err));
       if (ok) {
+        _xBridgeConfig = false;
         _xAck("char_end", true);
       } else {
+        _xWipeBridgeStaging();
+        _xBridgeConfig = false;
+        _xFailed = true;
         _xAckError("char_end", err[0] ? err : "bad bridge config");
       }
       return true;

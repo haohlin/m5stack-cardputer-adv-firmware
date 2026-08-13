@@ -30,6 +30,13 @@ inline bool buddyAppendPath(char (&paths)[Count][Width], uint8_t& used, const ch
   return true;
 }
 
+inline bool buddyAppendPath(char (*paths)[32], uint8_t& used, const char* value) {
+  if (!paths || used >= 32 || !buddySafePathComponent(value, 32)) return false;
+  snprintf(paths[used], 32, "%s", value);
+  ++used;
+  return true;
+}
+
 inline bool buddyFormattedLengthFits(int length, size_t capacity) {
   return length >= 0 && (size_t)length < capacity;
 }
@@ -40,7 +47,7 @@ inline bool buddyTransferFits(uint32_t total, uint32_t available, uint32_t reser
 
 inline bool buddyChunkFits(uint32_t fileExpected, uint32_t fileWritten,
                            uint32_t totalExpected, uint32_t totalWritten,
-                           size_t chunk) {
+                           uint32_t chunk) {
   if (fileWritten > fileExpected || totalWritten > totalExpected) return false;
   return chunk <= fileExpected - fileWritten && chunk <= totalExpected - totalWritten;
 }
