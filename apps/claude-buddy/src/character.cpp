@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <AnimatedGIF.h>
 #include <ArduinoJson.h>
+#include "security_utils.h"
 
 extern TFT_eSprite spr;
 
@@ -146,6 +147,7 @@ static void gifDrawCb(GIFDRAW* d) {
 // --- Public -------------------------------------------------------------
 
 bool characterInit(const char* name) {
+  loaded = false;
   if (!LittleFS.begin(true)) {
     // begin() fails if already mounted - that's fine on reload. The true
     // flag formats only an uninitialized partition, which lets fresh flashes
@@ -177,6 +179,7 @@ bool characterInit(const char* name) {
     if (!name) return false;
   }
 
+  if (!buddySafePathComponent(name, sizeof(scanned))) return false;
   snprintf(basePath, sizeof(basePath), "/characters/%s", name);
   char mpath[64];
   snprintf(mpath, sizeof(mpath), "%s/manifest.json", basePath);
@@ -234,13 +237,14 @@ bool characterInit(const char* name) {
     JsonVariant v = states[STATE_NAMES[i]];
     if (v.is<JsonArray>()) {
       for (JsonVariant e : v.as<JsonArray>()) {
-        if (gifTotal >= MAX_GIFS) break;
         const char* fn = e.as<const char*>();
-        if (fn) { snprintf(gifPaths[gifTotal], 32, "%s", fn); gifTotal++; stateCount[i]++; }
+        if (fn && !buddyAppendPath(gifPaths, gifTotal, fn)) return false;
+        if (fn) stateCount[i]++;
       }
     } else {
       const char* fn = v.as<const char*>();
-      if (fn) { snprintf(gifPaths[gifTotal], 32, "%s", fn); gifTotal++; stateCount[i] = 1; }
+      if (fn && !buddyAppendPath(gifPaths, gifTotal, fn)) return false;
+      if (fn) stateCount[i] = 1;
     }
   }
 

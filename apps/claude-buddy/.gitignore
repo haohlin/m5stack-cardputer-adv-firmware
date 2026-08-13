@@ -13,3 +13,4 @@ claude-plugin/*.zip
 graphify-out/cache/
 graphify-out/.rebuild.lock
 reference/vendor/
+__pycache__/

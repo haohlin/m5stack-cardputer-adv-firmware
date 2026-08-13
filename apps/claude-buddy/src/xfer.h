@@ -10,13 +10,16 @@
 #ifndef CARDPUTER_FW_TAG
 #define CARDPUTER_FW_TAG "adv-dev-bridge-serial"
 #endif
+#include "security_utils.h"
 
 static File     _xFile;
 static uint32_t _xExpected = 0, _xWritten = 0;
 static char     _xCharName[24] = "";
 static bool     _xActive = false;
 static bool     _xBridgeConfig = false;
+static bool     _xFailed = false;
 static uint32_t _xTotal = 0, _xTotalWritten = 0;
+static uint32_t _xLastActivityMs = 0;
 
 // Ack goes to both streams — we don't track which one delivered the command,
 // and writes to a clientless SerialBT just drop. The bridge listens on
@@ -97,6 +100,22 @@ static uint32_t _xWipeAllChars() {
   }
   root.close();
   return freed;
+}
+
+static void _xAbortTransfer() {
+  if (_xFile) _xFile.close();
+  _xFile = File();
+  if (_xBridgeConfig) {
+    _xWipeDir("/bridge");
+  } else if (buddySafePathComponent(_xCharName, sizeof(_xCharName))) {
+    char dir[48];
+    snprintf(dir, sizeof(dir), "/characters/%s", _xCharName);
+    _xWipeDir(dir);
+    LittleFS.rmdir(dir);
+  }
+  _xActive = false;
+  _xBridgeConfig = false;
+  _xFailed = true;
 }
 
 // Called from data.h when incoming JSON has a "cmd" key. Returns true if
@@ -200,23 +219,35 @@ inline bool xferCommand(JsonDocument& doc) {
       stats().approvals, stats().denials, statsMedianVelocity(),
       (unsigned long)stats().napSeconds, stats().level
     );
+    if (!buddyFormattedLengthFits(len, sizeof(b))) {
+      _xAck("status", false);
+      return true;
+    }
     safeSerialWrite(b, len);
     bleWrite((const uint8_t*)b, len);
     return true;
   }
 
   if (strcmp(cmd, "char_begin") == 0) {
+    if (_xActive) _xAbortTransfer();
     const char* name = doc["name"] | "pet";
     _xTotal = doc["total"] | 0;
+    if (!buddySafePathComponent(name, sizeof(_xCharName))) {
+      _xAck("char_begin", false);
+      return true;
+    }
     _xBridgeConfig = _xLooksBridgeConfigName(name);
 
     if (_xBridgeConfig) {
-      strncpy(_xCharName, "bridge-config", sizeof(_xCharName)-1);
-      _xCharName[sizeof(_xCharName)-1]=0;
+      snprintf(_xCharName, sizeof(_xCharName), "%s", "bridge-config");
       _xWipeDir("/bridge");
       LittleFS.mkdir("/bridge");
       _xTotalWritten = 0;
+      _xExpected = 0;
+      _xWritten = 0;
+      _xFailed = false;
       _xActive = true;
+      _xLastActivityMs = millis();
       _xAck("char_begin", true);
       return true;
     }
@@ -242,7 +273,7 @@ inline bool xferCommand(JsonDocument& doc) {
     }
     // Headroom for LittleFS metadata overhead — it's not byte-for-byte.
     uint32_t available = free + reclaimable;
-    if (_xTotal > 0 && _xTotal + 4096 > available) {
+    if (!buddyTransferFits(_xTotal, available, 4096)) {
       char b[96];
       int len = snprintf(b, sizeof(b),
         "{\"ack\":\"char_begin\",\"ok\":false,\"n\":%lu,\"error\":\"need %luK, have %luK\"}\n",
@@ -253,14 +284,18 @@ inline bool xferCommand(JsonDocument& doc) {
       return true;
     }
 
-    strncpy(_xCharName, name, sizeof(_xCharName)-1); _xCharName[sizeof(_xCharName)-1]=0;
+    snprintf(_xCharName, sizeof(_xCharName), "%s", name);
     characterClose();
     _xWipeAllChars();
     char dir[48]; snprintf(dir, sizeof(dir), "/characters/%s", _xCharName);
     LittleFS.mkdir(dir);
     _xTotalWritten = 0;
+    _xExpected = 0;
+    _xWritten = 0;
+    _xFailed = false;
     _xActive = true;
     _xBridgeConfig = false;
+    _xLastActivityMs = millis();
     _xAck("char_begin", true);
     return true;
   }
@@ -271,17 +306,24 @@ inline bool xferCommand(JsonDocument& doc) {
     const char* path = doc["path"];
     _xExpected = doc["size"] | 0;
     _xWritten = 0;
-    if (!path) { _xAck("file", false); return true; }
-    if (!_xSafePath(path)) { _xAckError("file", "bad path"); return true; }
-    char full[96];
+    if (!path || _xFailed || _xFile ||
+        !buddySafePathComponent(path, 48) ||
+        _xTotalWritten > _xTotal || _xExpected > _xTotal - _xTotalWritten) {
+      _xAbortTransfer();
+      _xAck("file", false);
+      return true;
+    }
+    char full[80];
     if (!_xBridgeConfig && _xIsBridgeJsonPath(path)) {
       _xBridgeConfig = true;
       _xWipeDir("/bridge");
       LittleFS.mkdir("/bridge");
     }
-    if (_xBridgeConfig) snprintf(full, sizeof(full), "/bridge/%s", _xBaseName(path));
+    if (_xBridgeConfig) snprintf(full, sizeof(full), "/bridge/%s", path);
     else snprintf(full, sizeof(full), "/characters/%s/%s", _xCharName, path);
     _xFile = LittleFS.open(full, "w");
+    if (!_xFile) _xAbortTransfer();
+    else _xLastActivityMs = millis();
     _xAck("file", (bool)_xFile);
     return true;
   }
@@ -293,10 +335,21 @@ inline bool xferCommand(JsonDocument& doc) {
     size_t outLen = 0;
     int rc = mbedtls_base64_decode(buf, sizeof(buf), &outLen,
                                    (const uint8_t*)b64, strlen(b64));
-    if (rc != 0) { _xAck("chunk", false); return true; }
-    _xFile.write(buf, outLen);
+    if (rc != 0 || _xFailed ||
+        !buddyChunkFits(_xExpected, _xWritten, _xTotal, _xTotalWritten, outLen)) {
+      _xAbortTransfer();
+      _xAck("chunk", false);
+      return true;
+    }
+    size_t stored = _xFile.write(buf, outLen);
+    if (stored != outLen) {
+      _xAbortTransfer();
+      _xAck("chunk", false);
+      return true;
+    }
     _xWritten += outLen;
     _xTotalWritten += outLen;
+    _xLastActivityMs = millis();
     // Ack every chunk — LittleFS writes can block on flash erase and the
     // UART RX buffer is only ~256 bytes. Without this the sender overruns it.
     _xAck("chunk", true, _xWritten);
@@ -304,18 +357,27 @@ inline bool xferCommand(JsonDocument& doc) {
   }
 
   if (strcmp(cmd, "file_end") == 0) {
-    bool ok = _xFile && (_xWritten == _xExpected || _xExpected == 0);
+    bool ok = !_xFailed && _xFile && _xWritten == _xExpected;
     if (_xFile) _xFile.close();
+    _xFile = File();
+    if (!ok) _xAbortTransfer();
+    else _xLastActivityMs = millis();
     _xAck("file_end", ok, _xWritten);
     return true;
   }
 
   if (strcmp(cmd, "char_end") == 0) {
-    _xActive = false;
+    bool ok = _xActive && !_xFailed && !_xFile && _xTotalWritten == _xTotal;
     if (_xBridgeConfig) {
+      if (!ok) {
+        _xAbortTransfer();
+        _xAck("char_end", false);
+        return true;
+      }
+      _xActive = false;
       _xBridgeConfig = false;
       char err[48] = "";
-      bool ok = _xSaveBridgeConfigFile("/bridge/bridge.json", err, sizeof(err));
+      ok = _xSaveBridgeConfigFile("/bridge/bridge.json", err, sizeof(err));
       if (ok) {
         _xAck("char_end", true);
       } else {
@@ -323,11 +385,12 @@ inline bool xferCommand(JsonDocument& doc) {
       }
       return true;
     }
+    _xActive = false;
     char bridgePath[96];
     snprintf(bridgePath, sizeof(bridgePath), "/characters/%s/bridge.json", _xCharName);
     if (LittleFS.exists(bridgePath)) {
       char err[48] = "";
-      bool ok = _xSaveBridgeConfigFile(bridgePath, err, sizeof(err));
+      if (ok) ok = _xSaveBridgeConfigFile(bridgePath, err, sizeof(err));
       char dir[48];
       snprintf(dir, sizeof(dir), "/characters/%s", _xCharName);
       _xWipeDir(dir);
@@ -339,7 +402,8 @@ inline bool xferCommand(JsonDocument& doc) {
       }
       return true;
     }
-    bool ok = characterInit(_xCharName);
+    if (ok) ok = characterInit(_xCharName);
+    if (!ok) _xAbortTransfer();
     extern bool buddyMode, gifAvailable;
     if (ok) { buddyMode = false; gifAvailable = true; speciesIdxSave(0xFF); }
     _xAck("char_end", ok);
@@ -352,3 +416,6 @@ inline bool xferCommand(JsonDocument& doc) {
 inline bool xferActive() { return _xActive; }
 inline uint32_t xferProgress() { return _xTotalWritten; }
 inline uint32_t xferTotal() { return _xTotal; }
+inline void xferTick() {
+  if (_xActive && millis() - _xLastActivityMs > 30000) _xAbortTransfer();
+}

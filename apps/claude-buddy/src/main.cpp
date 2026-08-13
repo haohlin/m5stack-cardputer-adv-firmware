@@ -10,12 +10,13 @@
 #ifdef CARDPUTER_ADV
 #include <esp_system.h>
 #endif
+#include "security_utils.h"
 
 TFT_eSprite spr = TFT_eSprite(&M5.Lcd);
 
 // Advertise as "Claude-XXXX" (last two BT MAC bytes) so multiple sticks
-// in one room are distinguishable in the desktop picker. Name persists in
-// btName for the BLUETOOTH info page.
+// in one room are distinguishable in the desktop picker. Pairing secret is
+// independent CSPRNG output generated at boot, never derived from that name.
 static char btName[16] = "Claude";
 static uint32_t btPin = 123456;
 
@@ -23,12 +24,11 @@ static void prepareBtIdentity() {
   uint8_t mac[6] = {0};
   esp_read_mac(mac, ESP_MAC_BT);
   snprintf(btName, sizeof(btName), "Claude-%02X%02X", mac[4], mac[5]);
-  uint32_t suffix = ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | mac[5];
-  btPin = 100000 + (suffix % 900000);
+  btPin = buddyPairingPasskey(esp_random());
 }
 
-static void startBt() {
-  bleInit(btName, true, btPin);
+static void startBt(bool enabled) {
+  bleInit(btName, true, btPin, enabled);
 }
 
 #include "character.h"
@@ -601,11 +601,8 @@ static void applySetting(uint8_t idx) {
       break;
     case 1: s.sound = !s.sound; break;
     case 2:
-      // BT toggle is a stored preference only — BLE stays live. Turning
-      // BLE off cleanly would require tearing down the BLE stack which
-      // the Arduino BLE library doesn't do reliably. If we need a
-      // hard-off someday, stop advertising via BLEDevice::getAdvertising().
       s.bt = !s.bt;
+      dataSetBleEnabled(s.bt);
       break;
     case 3:
       openWifiConfig(true);
@@ -2011,13 +2008,12 @@ void setup() {
   brightLevel = settings().bright;
   applyBrightness();
   prepareBtIdentity();
-  startBt();
+  startBt(settings().bt);
   bridgeWifiInit(btName);
   wifiStartupGuardInit();
   petNameLoad();
   buddyInit();
 
-  // BLE stays always-on; s.bt is stored as a preference only.
   spr.createSprite(W, H);
   characterInit(nullptr);  // scan /characters/ for whatever is installed
   gifAvailable = characterLoaded();

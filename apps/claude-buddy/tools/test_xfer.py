@@ -55,12 +55,14 @@ def send_file(name, path):
 
 src = sys.argv[1] if len(sys.argv) > 1 else f"{os.path.dirname(__file__)}/../characters/bufo"
 name = sys.argv[2] if len(sys.argv) > 2 else "test"
+files = sorted(glob.glob(f"{src}/*"))
+total = sum(os.path.getsize(f) for f in files)
 
 print(f"installing '{name}' from {src}")
 print("waiting for Stick...", end='', flush=True)
 for attempt in range(8):
     s.reset_input_buffer()
-    send({"cmd":"char_begin", "name":name})
+    send({"cmd":"char_begin", "name":name, "total":total})
     a = wait_ack("char_begin", timeout=2)
     if a and a.get('ok'):
         print(" ready")
@@ -71,8 +73,6 @@ else:
     sys.exit("\nchar_begin: Stick never responded")
 
 t0 = time.time()
-files = sorted(glob.glob(f"{src}/*"))
-total = sum(os.path.getsize(f) for f in files)
 print(f"{len(files)} files, {total} bytes total")
 
 for f in files:

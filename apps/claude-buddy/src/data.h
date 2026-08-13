@@ -273,6 +273,10 @@ struct _LineBuf {
   char buf[N];
   uint16_t len = 0;
   bool overflow = false;
+  void reset() {
+    len = 0;
+    overflow = false;
+  }
   void feed(Stream& s, TamaState* out, uint16_t budget = 256) {
     while (s.available() && budget--) {
       char c = s.read();
@@ -292,8 +296,15 @@ struct _LineBuf {
 static _LineBuf<1024> _usbLine;
 static _LineBuf<4352> _btLine;
 
+inline void dataSetBleEnabled(bool enabled) {
+  if (!enabled) _btLine.reset();
+  bleSetEnabled(enabled);
+  if (!enabled) _btLine.reset();
+}
+
 inline void dataPoll(TamaState* out) {
   uint32_t now = millis();
+  xferTick();
 
   if (_demoMode) {
     if (now >= _demoNext) { _demoIdx = (_demoIdx + 1) % 5; _demoNext = now + 8000; }
