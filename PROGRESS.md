@@ -18,8 +18,9 @@
 - Orca Cardputer Buddy now has independent firmware, Launcher-compatible root
   tooling, CA-validated WSS desktop bridge, protected USB pairing, bounded
   status protocol, and experimental Orca Desktop development plugin source.
-  Plugin installation is user-reviewed and read-only; bridge lifecycle and
-  device pairing remain explicit companion actions.
+  User-reviewed plugin commands explicitly bootstrap/start/status/stop bridge
+  and run protected USB pairing; no separate companion UI exists. No command
+  runs at install/enable; device and hardware proof remain operator actions.
 - Claude Buddy BLE, character transfer/parser, transfer failure cleanup, status
   formatting, and host character tools hardened with focused regression coverage.
 - RFID2 serial card writes, arm timeout, persisted input bounds, and Launcher

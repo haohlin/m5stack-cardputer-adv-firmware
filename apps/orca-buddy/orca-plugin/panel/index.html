@@ -15,7 +15,7 @@
 
 <main>
   <h1>Orca Cardputer Buddy</h1>
-  <p class="muted">Read-only setup panel. No device control or credentials pass through Orca.</p>
+  <p class="muted">Focused-worktree panel. Cardputer display is live bridge connection status.</p>
 
   <section class="card" aria-live="polite">
     <h2>Focused worktree</h2>
@@ -25,17 +25,17 @@
   <section class="card">
     <h2>Bridge setup</h2>
     <ol>
-      <li>Build desktop bridge from this repository.</li>
-      <li>Initialize it with this Mac’s reachable LAN address.</li>
-      <li>Install its per-user LaunchAgent.</li>
-      <li>Configure Wi-Fi on Cardputer, then complete one USB serial pairing.</li>
+      <li>Open Orca’s Command Palette, run <code>Orca Cardputer: Enable Bridge</code>.</li>
+      <li>Configure Wi-Fi on Cardputer, then attach its USB data cable.</li>
+      <li>Run <code>Orca Cardputer: Pair Connected Device</code>.</li>
+      <li>Disconnect USB; Cardputer reconnects over Wi-Fi.</li>
     </ol>
-    <p class="muted">Full commands live in this plugin’s README. Plugin does not create, start, or configure the bridge.</p>
+    <p class="muted">Use <code>Bridge Status</code> or <code>Disable Bridge</code> from Command Palette. Full behavior and fallback commands live in this plugin’s README.</p>
   </section>
 
   <section class="card">
     <h2>Security boundary</h2>
-    <p>Device pairing uses protected USB serial material, CA-validated WSS, and a dedicated bearer. This panel requests only <code>workspace.readContext</code>.</p>
+    <p>Explicit commands run fixed local bridge and USB serial pairing helpers; no terminal text or pairing secret passes through panel. Device pairing uses protected USB serial material, CA-validated WSS, and a dedicated bearer. Plugin requests <code>workspace.readContext</code> and desktop notifications.</p>
   </section>
 </main>
 

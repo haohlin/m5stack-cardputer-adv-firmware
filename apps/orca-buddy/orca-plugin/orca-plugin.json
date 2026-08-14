@@ -4,12 +4,13 @@
   "publisher": "haohlin",
   "name": "Orca Cardputer Buddy",
   "version": "0.1.0",
-  "description": "Guided setup and focused-worktree context for Orca Cardputer Buddy.",
+  "description": "Guided setup for a reviewed local bridge sidecar that streams public Orca status to a paired Cardputer only after explicit Orca commands.",
   "repository": "https://github.com/haohlin/m5stack-cardputer-adv-firmware",
   "engines": {
     "orca": ">=1.4.180"
   },
   "pluginApi": 1,
+  "main": "main.mjs",
   "contributes": {
     "panels": [
       {
@@ -18,11 +19,36 @@
         "icon": "radio",
         "entry": "panel/index.html"
       }
+    ],
+    "commands": [
+      {
+        "id": "enable-bridge",
+        "title": "Orca Cardputer: Enable Bridge",
+        "context": "global"
+      },
+      {
+        "id": "pair-connected-device",
+        "title": "Orca Cardputer: Pair Connected Device",
+        "context": "global"
+      },
+      {
+        "id": "bridge-status",
+        "title": "Orca Cardputer: Bridge Status",
+        "context": "global"
+      },
+      {
+        "id": "disable-bridge",
+        "title": "Orca Cardputer: Disable Bridge",
+        "context": "global"
+      }
     ]
   },
   "capabilities": [
     {
       "kind": "workspace:read"
+    },
+    {
+      "kind": "notifications:show"
     }
   ]
 }

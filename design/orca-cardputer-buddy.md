@@ -50,17 +50,30 @@ credentials remain bridge/device-private and are never returned by MCP.
 ## Orca Desktop plugin boundary
 
 `apps/orca-buddy/orca-plugin` is an experimental Orca Desktop development
-plugin. The user loads its folder through **Settings → Plugins → Development**,
-reviews its manifest, then enables it. It contributes one sidebar panel and
-requests only `workspace:read`; the panel uses Orca's public panel bridge to
-show the active worktree's bounded name, branch, and terminal count.
+plugin. User loads folder through **Settings → Plugins → Development**, reviews
+manifest, then enables it. It contributes one sidebar panel and four global
+Command Palette entries: enable bridge, pair connected device, bridge status,
+and disable bridge. Panel uses public panel bridge for bounded focused-worktree
+name, branch, and terminal count; it has no live sidecar channel. Device screen
+remains runtime connection source.
 
-The plugin has no worker and no network, process, USB, storage, secret, MCP,
-or terminal-send capability. It must not create credentials, bind a socket,
-install a LaunchAgent, change Wi-Fi, or send the USB pairing payload. The
-separate desktop bridge continues to own those security-sensitive actions and
-is explicitly initialized by its documented local command. This keeps an
-experimental plugin API from becoming an implicit device-control boundary.
+Plugin requests `workspace:read` and `notifications:show`. Orca plugin API v1
+does not yet provide process, network, USB, or sidecar capabilities. User has
+explicitly approved local development-worker implementation: worker starts no
+service on activation, accepts no panel input, and runs only on explicit global
+command. Its source fixes executable paths and argument lists to local `npm`,
+built bridge CLI, and protected USB pairing script. It never invokes shell,
+accepts terminal text/serial-port/network-address input, logs pairing material,
+or uses a VPN/public/ambiguous address; unique private IPv4 selection is
+mandatory. This is transparent development-plugin behavior, not marketplace
+portable capability contract.
+
+Persistent bridge remains separate LaunchAgent owner for WSS, certificate and
+credential generation, public Orca JSON collection, and device runtime. Pair
+command first requires configured bridge, creates unique protected payload, and
+invokes existing sender only after user selected explicit command. It clears
+`CARDPUTER_ADV_PORT` so sender detects exactly one attached Cardputer port.
+Plugin removal retains bridge/pairing state; disable only stops LaunchAgent.
 
 ## Backlog controls
 
