@@ -73,3 +73,9 @@ test("device protocol rejects unknown names and invalid question answers", async
   state.handleDeviceMessage({ version: "orca-cardputer/v1", type: "question.answer", questionId, answer: "A" });
   await pending;
 });
+
+test("notification reports undelivered when device rejects outbound backpressure", () => {
+  const state = new BridgeState();
+  state.attachDevice(() => false);
+  assert.deepEqual(state.notify("Notice"), { delivered: false });
+});

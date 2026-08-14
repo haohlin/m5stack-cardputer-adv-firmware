@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createProvisioningPayload,
@@ -32,12 +32,12 @@ export async function runManagementCli(args = process.argv.slice(2)): Promise<vo
   const home = homedir();
   const uid = process.getuid?.();
   if (uid === undefined) throw new Error("per-user LaunchAgent requires a POSIX user");
-  const binDirectory = dirname(fileURLToPath(import.meta.url));
+  const binDirectory = join(dirname(fileURLToPath(import.meta.url)), "bin");
   const common = {
     home,
     uid,
-    launchctlPath: "/bin/launchctl",
-    bridgeExecutable: fileURLToPath(new URL("./orca-cardputer-bridge.js", import.meta.url))
+    launchctlPath: process.env.ORCA_CARDPUTER_LAUNCHCTL_PATH ?? "/bin/launchctl",
+    bridgeExecutable: fileURLToPath(new URL("./bin/orca-cardputer-bridge.js", import.meta.url))
   };
   switch (args[0]) {
     case "init": {

@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 import { basename, dirname, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { bridgePaths, CODEX_MCP_NAME, LAUNCH_AGENT_LABEL } from "./paths.js";
+import { assertExplicitBindAddress } from "./validation.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,11 +32,28 @@ export interface InitializeResult {
 
 async function protectedDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`refusing unsafe directory path: ${path}`);
   await chmod(path, 0o700);
 }
 
-async function protectedWrite(path: string, data: string | Buffer): Promise<void> {
-  await protectedDirectory(dirname(path));
+async function preserveExistingDirectory(path: string): Promise<void> {
+  let created = false;
+  try {
+    await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    await mkdir(path, { recursive: true, mode: 0o700 });
+    created = true;
+  }
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`refusing unsafe directory path: ${path}`);
+  if (created) await chmod(path, 0o700);
+}
+
+async function protectedWrite(path: string, data: string | Buffer, protectParent = true): Promise<void> {
+  if (protectParent) await protectedDirectory(dirname(path));
+  else await preserveExistingDirectory(dirname(path));
   try {
     const existing = await lstat(path);
     if (!existing.isFile() || existing.isSymbolicLink()) throw new Error(`refusing unsafe output path: ${path}`);
@@ -61,7 +79,7 @@ export function redactedHomePath(path: string, home: string): string {
 export async function initializeBridge(options: InitializeOptions): Promise<InitializeResult> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 17654;
-  if (host === "0.0.0.0" || host === "::" || host.length === 0) throw new Error("wildcard listen address is forbidden");
+  assertExplicitBindAddress(host);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("port must be 1 to 65535");
   const paths = bridgePaths(options.home);
   try {
@@ -114,7 +132,7 @@ export async function initializeBridge(options: InitializeOptions): Promise<Init
   }, null, 2)}\n`);
   await protectedWrite(paths.pairingFile, `${JSON.stringify({
     version: "orca-cardputer/v1",
-    endpoint: `wss://${host}:${port}/device`,
+    endpoint: `wss://${isIP(host) === 6 ? `[${host}]` : host}:${port}/device`,
     token: pairingToken,
     ca
   }, null, 2)}\n`);
@@ -157,7 +175,7 @@ export async function createProvisioningPayload(options: { home: string; outputP
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  await protectedDirectory(dirname(options.outputPath));
+  await preserveExistingDirectory(dirname(options.outputPath));
   await writeFile(options.outputPath, payload, { flag: "wx", mode: 0o600 });
   await chmod(options.outputPath, 0o600);
   return { terminalMessage: `Protected USB-serial payload: ${redactedHomePath(options.outputPath, options.home)}` };
@@ -173,7 +191,7 @@ async function run(executable: string, args: string[], env?: NodeJS.ProcessEnv):
 
 export async function installLaunchAgent(options: CommandOptions): Promise<{ plistPath: string }> {
   const paths = bridgePaths(options.home);
-  await protectedDirectory(paths.launchAgents);
+  await preserveExistingDirectory(paths.launchAgents);
   await protectedDirectory(paths.logs);
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -185,22 +203,29 @@ export async function installLaunchAgent(options: CommandOptions): Promise<{ pli
 <key>StandardErrorPath</key><string>${xml(paths.stderrLog)}</string>
 </dict></plist>
 `;
-  await protectedWrite(paths.launchAgentPlist, plist);
+  await protectedWrite(paths.launchAgentPlist, plist, false);
   await run(options.launchctlPath, ["bootstrap", `gui/${options.uid}`, paths.launchAgentPlist], options.env);
   return { plistPath: paths.launchAgentPlist };
 }
 
 export async function startLaunchAgent(options: CommandOptions): Promise<void> {
-  await run(options.launchctlPath, ["kickstart", "-k", `gui/${options.uid}/${LAUNCH_AGENT_LABEL}`], options.env);
+  const paths = bridgePaths(options.home);
+  await run(options.launchctlPath, ["bootstrap", `gui/${options.uid}`, paths.launchAgentPlist], options.env);
 }
 
 export async function stopLaunchAgent(options: CommandOptions): Promise<void> {
-  await run(options.launchctlPath, ["kill", "SIGTERM", `gui/${options.uid}/${LAUNCH_AGENT_LABEL}`], options.env);
+  const paths = bridgePaths(options.home);
+  await run(options.launchctlPath, ["bootout", `gui/${options.uid}`, paths.launchAgentPlist], options.env);
 }
 
 export async function statusLaunchAgent(options: CommandOptions): Promise<{ output: string }> {
-  const { stdout } = await run(options.launchctlPath, ["print", `gui/${options.uid}/${LAUNCH_AGENT_LABEL}`], options.env);
-  return { output: stdout };
+  try {
+    await run(options.launchctlPath, ["print", `gui/${options.uid}/${LAUNCH_AGENT_LABEL}`], options.env);
+    return { output: "running\n" };
+  } catch (error) {
+    if (typeof (error as NodeJS.ErrnoException).code === "number") return { output: "stopped\n" };
+    throw error;
+  }
 }
 
 export async function uninstallLaunchAgent(options: CommandOptions): Promise<void> {

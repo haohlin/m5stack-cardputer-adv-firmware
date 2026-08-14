@@ -29,6 +29,11 @@ orca-cardputer install
 orca-cardputer mcp install
 ```
 
+`install` and `start` bootstrap the per-user LaunchAgent. `stop` boots it out,
+so its persistent `KeepAlive` policy cannot restart the daemon; `start` loads
+the retained plist again. `status` prints only `running` or `stopped`, never raw
+`launchctl` details.
+
 For a device-reachable LAN interface, explicitly pass its address to `init`.
 Wildcard addresses are rejected. Initialization prints only a `$HOME`-redacted
 path. Pairing token exists only in mode-0600 protected files and provisioning
@@ -39,3 +44,5 @@ State lives below `~/.orca-cardputer-bridge`; directories use mode 0700 and
 credentials/configuration use mode 0600. Device authenticates with CA-validated
 WSS plus bearer token. This service does not use mTLS, Claude Buddy source,
 private Orca hooks, terminal reads, terminal sends, or worktree controls.
+Upgraded device connections also have heartbeat, application-idle, absolute
+lifetime, forced-close, connection-count, frame, and outbound-buffer bounds.

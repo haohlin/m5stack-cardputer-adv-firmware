@@ -99,4 +99,122 @@ test("device listener defaults to loopback and rejects wildcard addresses", asyn
     () => startDeviceServer({ host: "0.0.0.0", cert: tls.cert, key: tls.key, bearerToken: "token" }),
     /wildcard/i
   );
+  await assert.rejects(
+    () => startDeviceServer({ host: "0:0:0:0:0:0:0:0", cert: tls.cert, key: tls.key, bearerToken: "token" }),
+    /wildcard/i
+  );
+});
+
+test("WSS closes outbound overflow before queueing more bytes", async (context) => {
+  const directory = await temporaryDirectory("orca-wss-overflow-");
+  const tls = await makeCertificate(directory);
+  let send: ((message: { version: "orca-cardputer/v1"; type: "notify"; text: string }) => boolean) | undefined;
+  const server = await startDeviceServer({
+    host: "127.0.0.1",
+    port: 0,
+    cert: tls.cert,
+    key: tls.key,
+    bearerToken: "device-pairing-token",
+    maxBufferedBytes: 32,
+    onConnection: (deviceSend) => { send = deviceSend; }
+  });
+  context.after(() => server.close());
+  const client = new WebSocket(`wss://127.0.0.1:${server.port}/device`, {
+    rejectUnauthorized: false,
+    headers: { Authorization: "Bearer device-pairing-token" }
+  });
+  await waitForEvent(client, "open");
+  const closed = waitForEvent(client, "close");
+  assert.equal(send?.({ version: "orca-cardputer/v1", type: "notify", text: "bounded notice" }), false);
+  assert.equal((await closed)[0], 1013);
+});
+
+test("WSS heartbeat and absolute lifetime close upgraded connections", async (context) => {
+  const directory = await temporaryDirectory("orca-wss-lifetime-");
+  const tls = await makeCertificate(directory);
+  const server = await startDeviceServer({
+    host: "127.0.0.1",
+    port: 0,
+    cert: tls.cert,
+    key: tls.key,
+    bearerToken: "device-pairing-token",
+    pingIntervalMs: 20,
+    idleTimeoutMs: 500,
+    connectionLifetimeMs: 90
+  });
+  context.after(() => server.close());
+  const client = new WebSocket(`wss://127.0.0.1:${server.port}/device`, {
+    rejectUnauthorized: false,
+    headers: { Authorization: "Bearer device-pairing-token" }
+  });
+  let pings = 0;
+  client.on("ping", () => { pings += 1; });
+  await waitForEvent(client, "open");
+  const result = await Promise.race([
+    waitForEvent(client, "close").then((args) => ({ kind: "close", args })),
+    new Promise<{ kind: "timeout" }>((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 300))
+  ]);
+  assert.equal(result.kind, "close");
+  assert.ok(pings >= 1);
+  if (result.kind === "close") assert.equal(result.args[0], 1001);
+});
+
+test("WSS idle deadline closes peers that send no application messages", async (context) => {
+  const directory = await temporaryDirectory("orca-wss-idle-");
+  const tls = await makeCertificate(directory);
+  const server = await startDeviceServer({
+    host: "127.0.0.1",
+    port: 0,
+    cert: tls.cert,
+    key: tls.key,
+    bearerToken: "device-pairing-token",
+    pingIntervalMs: 20,
+    idleTimeoutMs: 70,
+    connectionLifetimeMs: 500
+  });
+  context.after(() => server.close());
+  const client = new WebSocket(`wss://127.0.0.1:${server.port}/device`, {
+    rejectUnauthorized: false,
+    headers: { Authorization: "Bearer device-pairing-token" }
+  });
+  await waitForEvent(client, "open");
+  const result = await Promise.race([
+    waitForEvent(client, "close").then((args) => ({ kind: "close", args })),
+    new Promise<{ kind: "timeout" }>((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 300))
+  ]);
+  assert.equal(result.kind, "close");
+  if (result.kind === "close") assert.equal(result.args[0], 1001);
+});
+
+test("WSS terminates a stalled close and frees its connection slot", async (context) => {
+  const directory = await temporaryDirectory("orca-wss-stalled-");
+  const tls = await makeCertificate(directory);
+  const server = await startDeviceServer({
+    host: "127.0.0.1",
+    port: 0,
+    cert: tls.cert,
+    key: tls.key,
+    bearerToken: "device-pairing-token",
+    maxConnections: 1,
+    pingIntervalMs: 1_000,
+    idleTimeoutMs: 40,
+    connectionLifetimeMs: 1_000,
+    closeGraceMs: 40
+  });
+  context.after(() => server.close());
+  const stalled = new WebSocket(`wss://127.0.0.1:${server.port}/device`, {
+    rejectUnauthorized: false,
+    headers: { Authorization: "Bearer device-pairing-token" }
+  });
+  context.after(() => stalled.terminate());
+  await waitForEvent(stalled, "open");
+  (stalled as unknown as { _socket: { pause: () => void } })._socket.pause();
+  await new Promise((resolve) => setTimeout(resolve, 140));
+
+  const replacement = new WebSocket(`wss://127.0.0.1:${server.port}/device`, {
+    rejectUnauthorized: false,
+    headers: { Authorization: "Bearer device-pairing-token" }
+  });
+  context.after(() => replacement.terminate());
+  await waitForEvent(replacement, "open");
 });

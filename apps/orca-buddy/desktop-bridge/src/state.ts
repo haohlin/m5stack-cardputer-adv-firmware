@@ -7,7 +7,7 @@ import {
   MAX_PENDING_QUESTIONS
 } from "./validation.js";
 
-type SendDeviceMessage = (message: ServerMessage) => void;
+type SendDeviceMessage = (message: ServerMessage) => boolean | void;
 
 interface PendingQuestion {
   labels: string[];
@@ -128,8 +128,7 @@ export class BridgeState {
   private broadcast(message: ServerMessage): number {
     let delivered = 0;
     for (const send of this.devices) {
-      send(structuredClone(message));
-      delivered += 1;
+      if (send(structuredClone(message)) !== false) delivered += 1;
     }
     return delivered;
   }

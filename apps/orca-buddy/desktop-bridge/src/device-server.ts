@@ -3,6 +3,7 @@ import https from "node:https";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 import type { ServerMessage } from "./types.js";
+import { assertExplicitBindAddress } from "./validation.js";
 
 export interface DeviceServerOptions {
   host?: string;
@@ -12,6 +13,11 @@ export interface DeviceServerOptions {
   bearerToken: string;
   maxConnections?: number;
   maxFrameBytes?: number;
+  maxBufferedBytes?: number;
+  pingIntervalMs?: number;
+  idleTimeoutMs?: number;
+  connectionLifetimeMs?: number;
+  closeGraceMs?: number;
   onMessage?: (message: unknown) => void;
   onConnection?: (send: (message: ServerMessage) => boolean) => void | (() => void);
 }
@@ -36,11 +42,17 @@ function rejectUpgrade(socket: NodeJS.WritableStream, status: number, reason: st
 
 export async function startDeviceServer(options: DeviceServerOptions): Promise<DeviceServerHandle> {
   const host = options.host ?? "127.0.0.1";
-  if (host === "0.0.0.0" || host === "::" || host.length === 0) {
-    throw new Error("wildcard device listener addresses are forbidden; choose loopback or an explicit interface address");
-  }
+  assertExplicitBindAddress(host);
   const maximumConnections = options.maxConnections ?? 2;
   const maximumFrameBytes = options.maxFrameBytes ?? 4096;
+  const maximumBufferedBytes = options.maxBufferedBytes ?? maximumFrameBytes * 4;
+  const pingIntervalMs = options.pingIntervalMs ?? 30_000;
+  const idleTimeoutMs = options.idleTimeoutMs ?? 120_000;
+  const connectionLifetimeMs = options.connectionLifetimeMs ?? 24 * 60 * 60 * 1_000;
+  const closeGraceMs = options.closeGraceMs ?? 5_000;
+  for (const [name, value] of Object.entries({ maximumConnections, maximumFrameBytes, maximumBufferedBytes, pingIntervalMs, idleTimeoutMs, connectionLifetimeMs, closeGraceMs })) {
+    if (!Number.isInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`);
+  }
   let activeConnections = 0;
 
   const server = https.createServer(
@@ -76,33 +88,80 @@ export async function startDeviceServer(options: DeviceServerOptions): Promise<D
 
   webSockets.on("connection", (webSocket) => {
     let detached: void | (() => void);
+    let awaitingPong = false;
+    let forcedCloseTimer: NodeJS.Timeout | undefined;
+    const closeWithDeadline = (code: number, reason: string) => {
+      if (webSocket.readyState === WebSocket.OPEN) webSocket.close(code, reason);
+      if (forcedCloseTimer === undefined) {
+        forcedCloseTimer = setTimeout(() => {
+          if (webSocket.readyState !== WebSocket.CLOSED) webSocket.terminate();
+        }, closeGraceMs);
+        forcedCloseTimer.unref();
+      }
+    };
+    let idleTimer: NodeJS.Timeout;
+    const resetIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => closeWithDeadline(1001, "idle timeout"), idleTimeoutMs);
+      idleTimer.unref();
+    };
+    resetIdleTimer();
+    const lifetimeTimer = setTimeout(() => closeWithDeadline(1001, "connection lifetime exceeded"), connectionLifetimeMs);
+    lifetimeTimer.unref();
+    const heartbeat = setInterval(() => {
+      if (webSocket.readyState !== WebSocket.OPEN) return;
+      if (awaitingPong) {
+        webSocket.terminate();
+        return;
+      }
+      awaitingPong = true;
+      webSocket.ping();
+    }, pingIntervalMs);
+    heartbeat.unref();
+    webSocket.on("pong", () => { awaitingPong = false; });
     if (options.onConnection !== undefined) {
       detached = options.onConnection((message) => {
         if (webSocket.readyState !== WebSocket.OPEN) return false;
         const encoded = JSON.stringify(message);
-        if (Buffer.byteLength(encoded, "utf8") > maximumFrameBytes) return false;
-        webSocket.send(encoded);
+        const encodedBytes = Buffer.byteLength(encoded, "utf8");
+        if (encodedBytes > maximumFrameBytes) {
+          closeWithDeadline(1009, "outbound frame too large");
+          return false;
+        }
+        if (webSocket.bufferedAmount + encodedBytes > maximumBufferedBytes) {
+          closeWithDeadline(1013, "outbound backpressure");
+          return false;
+        }
+        webSocket.send(encoded, (error) => {
+          if (error) closeWithDeadline(1011, "outbound send failed");
+        });
         return true;
       });
     }
     webSocket.on("message", (data, isBinary) => {
       if (isBinary) {
-        webSocket.close(1003, "text JSON required");
+        closeWithDeadline(1003, "text JSON required");
         return;
       }
       try {
         const text = data.toString();
         if (Buffer.byteLength(text, "utf8") > maximumFrameBytes) {
-          webSocket.close(1009, "frame too large");
+          closeWithDeadline(1009, "frame too large");
           return;
         }
-        options.onMessage?.(JSON.parse(text));
+        const message: unknown = JSON.parse(text);
+        options.onMessage?.(message);
+        resetIdleTimer();
       } catch (error) {
-        webSocket.close(error instanceof SyntaxError ? 1007 : 1008, "invalid device message");
+        closeWithDeadline(error instanceof SyntaxError ? 1007 : 1008, "invalid device message");
       }
     });
     webSocket.on("error", () => {});
     webSocket.once("close", () => {
+      clearInterval(heartbeat);
+      clearTimeout(idleTimer);
+      clearTimeout(lifetimeTimer);
+      if (forcedCloseTimer !== undefined) clearTimeout(forcedCloseTimer);
       activeConnections -= 1;
       detached?.();
     });
@@ -127,7 +186,7 @@ export async function startDeviceServer(options: DeviceServerOptions): Promise<D
     host,
     port: address.port,
     close: async () => {
-      for (const client of webSockets.clients) client.close(1001, "server stopping");
+      for (const client of webSockets.clients) client.terminate();
       await new Promise<void>((resolve, reject) => webSockets.close((error) => error ? reject(error) : resolve()));
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

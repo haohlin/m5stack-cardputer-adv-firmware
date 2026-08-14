@@ -15,10 +15,10 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "npm run build && node --import tsx --test test/*.test.ts",
     "test:collector": "node --import tsx --test test/collector.test.ts",
     "test:protocol": "node --import tsx --test test/state.test.ts test/ipc.test.ts test/device-server.test.ts test/mcp.test.ts",
-    "test:management": "node --import tsx --test test/management.test.ts",
+    "test:management": "npm run build && node --import tsx --test test/management.test.ts test/daemon.test.ts test/integration.test.ts",
     "test:focused": "npm run test:collector && npm run test:protocol && npm run test:management"
   },
   "engines": {

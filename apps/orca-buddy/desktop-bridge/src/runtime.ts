@@ -1,7 +1,7 @@
 import { lstat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { bridgePaths } from "./paths.js";
-import { isRecord } from "./validation.js";
+import { assertExplicitBindAddress, isRecord } from "./validation.js";
 
 export interface RuntimeConfiguration {
   home: string;
@@ -34,7 +34,7 @@ export async function loadRuntimeConfiguration(home = homedir()): Promise<Runtim
   const tlsCertificatePath = configValue.tlsCertificatePath;
   const tlsPrivateKeyPath = configValue.tlsPrivateKeyPath;
   if (
-    typeof listenAddress !== "string" || listenAddress.length === 0 || listenAddress === "0.0.0.0" || listenAddress === "::" ||
+    typeof listenAddress !== "string" ||
     typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535 ||
     typeof socketPath !== "string" || socketPath !== paths.socket ||
     typeof tlsCertificatePath !== "string" || tlsCertificatePath !== paths.serverCert ||
@@ -42,6 +42,7 @@ export async function loadRuntimeConfiguration(home = homedir()): Promise<Runtim
   ) {
     throw new Error("invalid bridge configuration");
   }
+  assertExplicitBindAddress(listenAddress);
   const [localAuthToken, pairingToken, certificate, privateKey] = await Promise.all([
     readProtectedFile(paths.localAuthToken),
     readProtectedFile(paths.pairingToken),
