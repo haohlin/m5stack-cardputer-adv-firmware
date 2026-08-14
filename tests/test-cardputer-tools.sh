@@ -8,7 +8,18 @@ cd "$ROOT"
 bash -n cardputer tools/cardputer/common.sh
 ./cardputer apps | rg -qx 'rfid2       RFID2 Clone Station'
 ./cardputer apps | rg -qx 'claude-buddy Claude Desktop Buddy'
+./cardputer apps | rg -qx 'orca-buddy   Orca Cardputer Buddy'
 ./cardputer install-help | rg -q 'Launcher Settings -> USB MSC'
+./cardputer --help | rg -Fqx '  ./cardputer build <rfid2|claude-buddy|orca-buddy>'
+./cardputer --help | rg -Fqx '  ./cardputer release <rfid2|claude-buddy|orca-buddy>'
+./cardputer --help | rg -Fqx '  ./cardputer stage <rfid2|claude-buddy|orca-buddy>'
+./cardputer --help | rg -qx '  ./cardputer debug orca-buddy serial \[serial-port\]'
+
+if unknown_app_output="$(./cardputer build not-an-app 2>&1)"; then
+  echo "Unknown app was accepted" >&2
+  exit 1
+fi
+[[ "$unknown_app_output" == "cardputer: unknown app 'not-an-app' (use: rfid2, claude-buddy, orca-buddy)" ]]
 
 grep -qx 'APP_VERSION="1.4.0"' apps/claude-buddy/app.env
 grep -qx 'APP_PLATFORMIO_ENV="cardputer-adv-launcher-ota"' apps/claude-buddy/app.env
@@ -28,6 +39,13 @@ load_app claude-buddy
 [[ "$APP_PLATFORMIO_ENV" == "cardputer-adv-launcher-ota" ]]
 [[ "$APP_FIRMWARE_REL" == ".pio/build/cardputer-adv-launcher-ota/firmware.bin" ]]
 [[ "$APP_ARTIFACT_PREFIX" == "Claude-Desktop-Buddy" ]]
+load_app orca-buddy
+[[ "$APP_ID" == "orca-buddy" ]]
+[[ "$APP_TITLE" == "Orca Cardputer Buddy" ]]
+[[ "$APP_VERSION" == "0.1.0" ]]
+[[ "$APP_PLATFORMIO_ENV" == "cardputer-adv-launcher-ota" ]]
+[[ "$APP_FIRMWARE_REL" == ".pio/build/cardputer-adv-launcher-ota/firmware.bin" ]]
+[[ "$APP_ARTIFACT_PREFIX" == "Orca-Cardputer-Buddy" ]]
 
 guard_root="$(mktemp -d)"
 trap 'rm -rf "$guard_root"' EXIT

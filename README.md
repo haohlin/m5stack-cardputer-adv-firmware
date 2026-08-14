@@ -9,6 +9,8 @@ Formerly `cardputer-rfid2-fw`; RFID2 release history remains intact.
 
 - `apps/rfid2` — RFID2 Clone Station for owned MIFARE Classic lab cards.
 - `apps/claude-buddy` — Claude Desktop Buddy BLE companion device.
+- `apps/orca-buddy` — Orca Cardputer Buddy app contract; product behavior is
+  pending its own implementation tasks.
 
 `claude-buddy-v1.3.0` preserves historical raw-source provenance and predates
 Launcher OTA. It is not a Launcher release. Current Claude Buddy package
@@ -23,7 +25,7 @@ tag only after physical Launcher-installed proof.
 ./cardputer stage rfid2
 ```
 
-Replace `rfid2` with `claude-buddy`. `stage` requires Launcher USB MSC mode;
+Replace `rfid2` with `claude-buddy` or `orca-buddy`. `stage` requires Launcher USB MSC mode;
 Launcher then installs the raw app image from SD `tools/` through OTA. See
 [development guide](docs/development.md), [versioning policy](VERSIONING.md),
 and [firmware-suite design](design/firmware-suite.md).

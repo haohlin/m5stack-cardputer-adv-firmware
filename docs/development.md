@@ -1,6 +1,7 @@
 # M5Stack Cardputer ADV Firmware development
 
-`apps/rfid2` and `apps/claude-buddy` are independent PlatformIO projects. Each
+`apps/rfid2`, `apps/claude-buddy`, and `apps/orca-buddy` are independent
+PlatformIO projects. Each
 owns its source, `platformio.ini`, libraries, `.venv`, `.pio`, and release
 metadata. Root tooling only selects an app and enforces shared Launcher install
 contract.
@@ -13,7 +14,7 @@ contract.
 ./cardputer stage rfid2
 ```
 
-Repeat with `claude-buddy`. `release` produces raw ESP application image and
+Repeat with `claude-buddy` or `orca-buddy`. `release` produces raw ESP application image and
 JSON provenance manifest under `dist/<app>/`. `stage` rebuilds, verifies ESP
 image header, enforces Launcher OTA size, copies only raw image to mounted
 Launcher SD `tools/`, verifies SHA-256, and removes only older binaries with
@@ -37,6 +38,7 @@ ambiguous. Set `CARDPUTER_NO_EJECT=1` when manual ejection is preferred.
 ./cardputer debug rfid2 jtag
 ./cardputer debug claude-buddy serial [port]
 ./cardputer debug claude-buddy ble
+./cardputer debug orca-buddy serial [port]
 ```
 
 RFID2 smoke test: `version`, `status`, `scan`, confirm SD/RAM state, then use a
@@ -53,7 +55,7 @@ before staging apps.
 ## Versioning
 
 Read [`../VERSIONING.md`](../VERSIONING.md) before release. New tags are
-app-namespaced: `rfid2-vX.Y.Z` and `claude-buddy-vX.Y.Z`.
+app-namespaced: `rfid2-vX.Y.Z`, `claude-buddy-vX.Y.Z`, and `orca-buddy-vX.Y.Z`.
 `claude-buddy-v1.3.0` is historical raw-source provenance, not a Launcher
 release. Claude Buddy package metadata is now `1.4.0`.
 `claude-buddy-v1.4.0` will be the first Launcher release tag and requires

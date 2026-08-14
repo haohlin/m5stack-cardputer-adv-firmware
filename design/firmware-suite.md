@@ -4,6 +4,7 @@
 M5Stack Cardputer ADV Firmware
 ├── apps/rfid2          RFID2 Clone Station
 ├── apps/claude-buddy   Claude Desktop Buddy
+├── apps/orca-buddy     Orca Cardputer Buddy
 ├── contracts/launcher  pinned partition contract
 └── cardputer           shared developer entrypoint
 ```

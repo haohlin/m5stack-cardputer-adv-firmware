@@ -10,12 +10,13 @@ usage() {
   cat <<'EOF'
 Usage:
   ./cardputer apps
-  ./cardputer build <rfid2|claude-buddy>
-  ./cardputer release <rfid2|claude-buddy>
-  ./cardputer stage <rfid2|claude-buddy>
+  ./cardputer build <rfid2|claude-buddy|orca-buddy>
+  ./cardputer release <rfid2|claude-buddy|orca-buddy>
+  ./cardputer stage <rfid2|claude-buddy|orca-buddy>
   ./cardputer install-help
   ./cardputer debug rfid2 <serial|status|jtag> [serial-port]
   ./cardputer debug claude-buddy <serial|ble> [serial-port]
+  ./cardputer debug orca-buddy serial [serial-port]
 
 Normal install: build/package raw app image, copy it to Launcher USB MSC tools/,
 then select it in Launcher and Install.
@@ -33,6 +34,7 @@ case "${1:-}" in
   apps)
     echo "rfid2       RFID2 Clone Station"
     echo "claude-buddy Claude Desktop Buddy"
+    echo "orca-buddy   Orca Cardputer Buddy"
     ;;
   build)
     [[ $# == 2 ]] || { usage >&2; exit 2; }
@@ -59,7 +61,7 @@ EOF
     [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
     app="$2" action="$3" port="${4:-}"
     case "$app:$action" in
-      rfid2:serial|claude-buddy:serial) serial_monitor "$app" "$port" ;;
+      rfid2:serial|claude-buddy:serial|orca-buddy:serial) serial_monitor "$app" "$port" ;;
       rfid2:status) exec "$ROOT/apps/rfid2/scripts/watch_status.sh" "$port" ;;
       rfid2:jtag) exec "$ROOT/apps/rfid2/scripts/jtag_pc_status.sh" ;;
       claude-buddy:ble)

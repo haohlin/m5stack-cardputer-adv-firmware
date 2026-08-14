@@ -18,6 +18,10 @@ Claude Buddy app and package provenance now use version `1.4.0`.
 only after the Launcher-installed physical smoke test succeeds. Version
 metadata does not make the historical v1.3.0 image Launcher-installable.
 
+Orca Cardputer Buddy starts at metadata-only version `0.1.0`. It has no
+firmware artifact or release tag yet. Reserve `orca-buddy-v0.1.0` for its first
+completed Launcher-installed physical smoke test after product implementation.
+
 ## New releases
 
 Use namespaced annotated tags from now on:
@@ -25,6 +29,7 @@ Use namespaced annotated tags from now on:
 ```text
 rfid2-vX.Y.Z
 claude-buddy-vX.Y.Z
+orca-buddy-vX.Y.Z
 ```
 
 Before a release:

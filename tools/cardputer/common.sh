@@ -17,8 +17,8 @@ load_contract() {
 load_app() {
   local requested="${1:-}"
   case "$requested" in
-    rfid2|claude-buddy) ;;
-    *) die "unknown app '$requested' (use: rfid2, claude-buddy)" ;;
+    rfid2|claude-buddy|orca-buddy) ;;
+    *) die "unknown app '$requested' (use: rfid2, claude-buddy, orca-buddy)" ;;
   esac
 
   APP_DIR="$CARDPUTER_ROOT/apps/$requested"
