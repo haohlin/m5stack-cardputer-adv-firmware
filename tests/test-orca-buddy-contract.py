@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -43,6 +44,33 @@ class OrcaBuddyContractTest(unittest.TestCase):
             "board_build.partitions = ../../contracts/launcher/cardputer-adv-8mb.csv",
             config,
         )
+
+    def test_serial_candidate_collection_deduplicates_overlapping_globs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            port = Path(temporary) / "cu.usbmodem-test"
+            port.touch()
+            command = (
+                "source apps/orca-buddy/scripts/select_cardputer_port.sh; "
+                "ports=(); collect_port_candidates \"$1\" \"$1\"; "
+                "printf '%s:%s\\n' \"${#ports[@]}\" \"${ports[0]}\""
+            )
+            result = subprocess.run(
+                ["bash", "-c", command, "_", str(port)],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.stdout, f"1:{port}\n")
+
+            explicit = subprocess.run(
+                [str(APP / "scripts" / "select_cardputer_port.sh"), "/dev/explicit"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(explicit.stdout, "/dev/explicit\n")
 
 
 if __name__ == "__main__":
