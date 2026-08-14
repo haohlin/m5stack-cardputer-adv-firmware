@@ -45,6 +45,14 @@ RFID2 smoke test: `version`, `status`, `scan`, confirm SD/RAM state, then use a
 read-only card scan before write or clone. Buddy smoke test: boot, USB serial
 identity, BLE advertising/pairing, and one permission-prompt path.
 
+Orca Buddy operator path: build/release/stage through Launcher, initialize and
+install `apps/orca-buddy/desktop-bridge` on an explicit LAN address, create a
+protected `orca-pair` payload, then run
+`apps/orca-buddy/scripts/write_pairing_serial.sh` once. On the device press
+`W` to scan/select Wi-Fi and enter its passphrase; verify a status snapshot,
+one bounded question answer, one prompt draft, and reconnect after a bridge
+restart. Do not run the serial sender while a serial monitor owns the port.
+
 ## Recovery boundary
 
 `apps/claude-buddy/scripts/recovery/` retains direct serial flash, erase, and

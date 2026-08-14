@@ -21,6 +21,13 @@ bash apps/orca-buddy/tests/run_host_tests.sh
 
 Device setup scans Wi-Fi and accepts a keyed passphrase locally. Generate the
 single protected `orca-pair` payload with desktop bridge management tooling,
-then send that complete line over USB serial. Pairing bearer and CA contents
-are never shown. `W` reconfigures Wi-Fi; `F` opens a local forget confirmation;
-`P` enters a prompt draft. Normal workflow has no direct-flash helper.
+then send it without revealing contents:
+
+```sh
+./apps/orca-buddy/scripts/write_pairing_serial.sh "$PAIR_FILE" [serial-port]
+```
+
+The firmware accepts one complete `orca-pair` line and emits only a success or
+failure acknowledgement. `W` scans and configures Wi-Fi on-device; `F` opens a
+local forget confirmation; `P` enters a prompt draft. Pairing bearer and CA
+contents are never shown. Normal workflow has no direct-flash helper.

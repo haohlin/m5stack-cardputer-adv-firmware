@@ -9,8 +9,8 @@ Formerly `cardputer-rfid2-fw`; RFID2 release history remains intact.
 
 - `apps/rfid2` — RFID2 Clone Station for owned MIFARE Classic lab cards.
 - `apps/claude-buddy` — Claude Desktop Buddy BLE companion device.
-- `apps/orca-buddy` — Orca Cardputer Buddy app contract; product behavior is
-  pending its own implementation tasks.
+- `apps/orca-buddy` — Orca Cardputer Buddy: independent Wi-Fi status console,
+  local desktop bridge, and Codex MCP companion for public Orca status.
 
 `claude-buddy-v1.3.0` preserves historical raw-source provenance and predates
 Launcher OTA. It is not a Launcher release. Current Claude Buddy package
