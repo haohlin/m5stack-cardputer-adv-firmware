@@ -29,9 +29,14 @@ function isPrivateIpv4(address) {
     (octets[0] === 192 && octets[1] === 168);
 }
 
+function isTunnelInterface(name) {
+  return /^(utun|tun|tap|ppp|ipsec|wg|tailscale)/i.test(name);
+}
+
 export function selectUniquePrivateIpv4(interfaces) {
   const candidates = new Set();
-  for (const records of Object.values(interfaces)) {
+  for (const [name, records] of Object.entries(interfaces)) {
+    if (isTunnelInterface(name)) continue;
     for (const record of records ?? []) {
       if (String(record.family) === "IPv4" && !record.internal && isPrivateIpv4(record.address)) {
         candidates.add(record.address);
@@ -84,7 +89,7 @@ export function createBridgeRuntime({
   bridgeWsModule = BRIDGE_WS_MODULE,
   pairingSender = PAIRING_SENDER,
   home = homedir(),
-  nodePath = process.execPath,
+  nodePath = "node",
   interfaces = networkInterfaces,
   run = runFixed,
   regularFile = isRegularFile,
@@ -161,7 +166,7 @@ export function createPluginController({ runtime, notify, log }) {
   const reportFailure = async (action) => {
     log(`Orca Cardputer ${action} failed`);
     await notify(`${action} failed. Check plugin README; no pairing secret was shown.`);
-    throw new Error(`Orca Cardputer ${action} failed. See plugin README.`);
+    return { ok: false };
   };
 
   return {
@@ -171,7 +176,7 @@ export function createPluginController({ runtime, notify, log }) {
           await runtime.enable();
           await notify("Bridge enabled. Pair device once over USB, then check Cardputer display.");
         } catch {
-          await reportFailure("bridge enable");
+          return reportFailure("bridge enable");
         }
       });
       commands.register(COMMANDS.pair, async () => {
@@ -179,7 +184,7 @@ export function createPluginController({ runtime, notify, log }) {
           await runtime.pair();
           await notify("USB pairing saved. Disconnect USB; Cardputer reconnects over Wi-Fi.");
         } catch {
-          await reportFailure("device pairing");
+          return reportFailure("device pairing");
         }
       });
       commands.register(COMMANDS.status, async () => {
@@ -188,7 +193,7 @@ export function createPluginController({ runtime, notify, log }) {
           await notify(`Bridge status: ${state}. Device display is live connection status.`);
           return state;
         } catch {
-          await reportFailure("bridge status");
+          return reportFailure("bridge status");
         }
       });
       commands.register(COMMANDS.disable, async () => {
@@ -197,7 +202,7 @@ export function createPluginController({ runtime, notify, log }) {
           await notify(`Bridge status: ${state}. Pairing state is retained.`);
           return state;
         } catch {
-          await reportFailure("bridge disable");
+          return reportFailure("bridge disable");
         }
       });
     },

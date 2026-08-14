@@ -64,9 +64,11 @@ service on activation, accepts no panel input, and runs only on explicit global
 command. Its source fixes executable paths and argument lists to local `npm`,
 built bridge CLI, and protected USB pairing script. It never invokes shell,
 accepts terminal text/serial-port/network-address input, logs pairing material,
-or uses a VPN/public/ambiguous address; unique private IPv4 selection is
-mandatory. This is transparent development-plugin behavior, not marketplace
-portable capability contract.
+or uses a public/ambiguous address. Known tunnel interfaces (`utun`, `tun`,
+`tap`, `ppp`, `ipsec`, WireGuard, and Tailscale) are excluded before unique
+private IPv4 selection; zero or multiple remaining candidates reject. This is
+transparent development-plugin behavior, not marketplace portable capability
+contract.
 
 Persistent bridge remains separate LaunchAgent owner for WSS, certificate and
 credential generation, public Orca JSON collection, and device runtime. Pair

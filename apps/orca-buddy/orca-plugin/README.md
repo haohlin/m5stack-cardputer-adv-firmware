@@ -41,9 +41,11 @@ use Orca Command Palette in this order:
 
 `Enable Bridge` uses existing local bridge build when present. If build is
 missing, it runs only `npm ci` then `npm run build` inside this repository’s
-`apps/orca-buddy/desktop-bridge`. It accepts exactly one non-loopback private
-IPv4 address (`10/8`, `172.16/12`, or `192.168/16`); zero or multiple candidates
-fail closed rather than selecting VPN, public, or ambiguous network address.
+`apps/orca-buddy/desktop-bridge`. It ignores known tunnel interfaces
+(`utun`, `tun`, `tap`, `ppp`, `ipsec`, WireGuard, and Tailscale), then accepts
+exactly one non-loopback private IPv4 address (`10/8`, `172.16/12`, or
+`192.168/16`). Zero or multiple remaining candidates fail closed rather than
+selecting public or ambiguous network address.
 It creates protected local CA/WSS/pairing state in
 `~/.orca-cardputer-bridge` and starts existing per-user LaunchAgent bridge.
 

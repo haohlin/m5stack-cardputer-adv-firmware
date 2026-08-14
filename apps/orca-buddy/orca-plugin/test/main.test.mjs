@@ -20,6 +20,13 @@ test("selectUniquePrivateIpv4 fails closed for ambiguous or public addresses", (
   }), /exactly one private LAN IPv4/);
 });
 
+test("selectUniquePrivateIpv4 ignores macOS tunnel interfaces", () => {
+  assert.equal(selectUniquePrivateIpv4({
+    en0: [{ family: "IPv4", address: "192.168.31.209", internal: false }],
+    utun8: [{ family: "IPv4", address: "172.29.230.152", internal: false }],
+  }), "192.168.31.209");
+});
+
 test("bridge runtime uses fixed local commands and a single private LAN address", async () => {
   const bridgeRoot = "/repo/apps/orca-buddy/desktop-bridge";
   const bridgeCli = `${bridgeRoot}/dist/bin/orca-cardputer.js`;
@@ -38,7 +45,6 @@ test("bridge runtime uses fixed local commands and a single private LAN address"
     bridgeCli,
     bridgeWsModule,
     home,
-    nodePath: "/node",
     interfaces: () => ({ en0: [{ family: "IPv4", address: "192.168.4.2", internal: false }] }),
     regularFile: async (path) =>
       (path === bridgeCli && built) ||
@@ -49,9 +55,9 @@ test("bridge runtime uses fixed local commands and a single private LAN address"
       calls.push({ executable, args, options });
       if (executable === "npm" && args.join(" ") === "ci") dependencies = true;
       if (executable === "npm" && args.join(" ") === "run build") built = true;
-      if (executable === "/node" && args[1] === "init") configured = true;
-      if (executable === "/node" && args[1] === "install") installed = true;
-      if (executable === "/node" && args[1] === "status") return { stdout: "running\n", stderr: "" };
+      if (executable === "node" && args[1] === "init") configured = true;
+      if (executable === "node" && args[1] === "install") installed = true;
+      if (executable === "node" && args[1] === "status") return { stdout: "running\n", stderr: "" };
       return { stdout: "", stderr: "" };
     },
   });
@@ -62,9 +68,9 @@ test("bridge runtime uses fixed local commands and a single private LAN address"
     [
       ["npm", ["ci"]],
       ["npm", ["run", "build"]],
-      ["/node", [bridgeCli, "init", "--host", "192.168.4.2", "--port", "17654"]],
-      ["/node", [bridgeCli, "install"]],
-      ["/node", [bridgeCli, "status"]],
+      ["node", [bridgeCli, "init", "--host", "192.168.4.2", "--port", "17654"]],
+      ["node", [bridgeCli, "install"]],
+      ["node", [bridgeCli, "status"]],
     ],
   );
   assert.equal(calls.every(({ options }) => options.cwd === bridgeRoot), true);
@@ -99,6 +105,26 @@ test("controller registers fixed commands and never exposes pairing material", a
   assert.deepEqual(calls, ["enable", "pair", "status", "disable"]);
   assert.equal(notices.join(" ").toLowerCase().includes("token"), false);
   assert.equal(notices.join(" ").toLowerCase().includes("bearer"), false);
+});
+
+test("controller reports a safe failure without causing Orca command failure", async () => {
+  const notices = [];
+  const registered = new Map();
+  const controller = createPluginController({
+    runtime: {
+      enable: async () => { throw new Error("private bearer must never appear"); },
+      pair: async () => {},
+      status: async () => "stopped",
+      disable: async () => "stopped",
+    },
+    notify: async (body) => notices.push(body),
+    log: () => {},
+  });
+
+  controller.register({ register: (id, handler) => registered.set(id, handler) });
+  await assert.doesNotReject(registered.get(COMMANDS.enable)());
+  assert.match(notices[0], /bridge enable failed/i);
+  assert.doesNotMatch(notices[0], /bearer|private/i);
 });
 
 test("activate registers same fixed command set with Orca host", () => {
