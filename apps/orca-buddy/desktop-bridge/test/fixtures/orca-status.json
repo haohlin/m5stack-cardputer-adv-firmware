@@ -1,0 +1,7 @@
+{
+  "connected": true,
+  "account": "private@example.invalid",
+  "pairingToken": "must-not-leak",
+  "terminal": { "content": "private terminal output" },
+  "workspacePath": "/private/workspace"
+}

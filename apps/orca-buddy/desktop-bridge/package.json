@@ -1,0 +1,36 @@
+{
+  "name": "@haohan/orca-cardputer-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Orca Cardputer Buddy bridge and Codex MCP adapter",
+  "type": "module",
+  "bin": {
+    "orca-cardputer-bridge": "dist/bin/orca-cardputer-bridge.js",
+    "orca-cardputer-mcp": "dist/bin/orca-cardputer-mcp.js",
+    "orca-cardputer": "dist/bin/orca-cardputer.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:collector": "node --import tsx --test test/collector.test.ts",
+    "test:protocol": "node --import tsx --test test/state.test.ts test/ipc.test.ts test/device-server.test.ts test/mcp.test.ts",
+    "test:management": "node --import tsx --test test/management.test.ts",
+    "test:focused": "npm run test:collector && npm run test:protocol && npm run test:management"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "@types/ws": "8.18.1",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}

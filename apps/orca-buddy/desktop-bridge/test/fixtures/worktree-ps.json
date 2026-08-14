@@ -1,0 +1,21 @@
+{
+  "count": 999,
+  "worktrees": [
+    {
+      "displayName": "Firmware",
+      "workspaceStatus": "active",
+      "agentState": "working",
+      "path": "/private/firmware",
+      "sessionId": "secret-session",
+      "terminal": "private output"
+    },
+    {
+      "displayName": "Docs",
+      "workspaceStatus": "idle",
+      "agentState": "waiting",
+      "prompt": "private prompt",
+      "toolInput": "private tool input"
+    }
+  ],
+  "arbitrary": { "secret": true }
+}
