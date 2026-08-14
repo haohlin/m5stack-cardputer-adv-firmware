@@ -9,10 +9,10 @@ questions, and keyboard prompt drafts. It shares only documented
 code, protocol, characters, naming, or assets are used.
 
 The local Orca Desktop plugin source is in [`orca-plugin`](orca-plugin/). Add
-that folder only through **Settings → Plugins → Development**. It is a
-read-only worktree-context and setup panel: it neither installs the bridge nor
-touches a Cardputer. Its guide documents the separate bridge and USB pairing
-steps.
+that folder only through **Settings → Plugins → Development**. Its read-only
+panel shows focused worktree context; explicit Command Palette commands start,
+stop, and inspect the local bridge or send protected USB pairing material. No
+action runs when plugin is added or enabled. See its guide for exact flow.
 
 Normal build, package, stage, and serial-monitor entrypoints are exposed only
 through `./cardputer`. Launcher installs the raw app image from `tools/`.
