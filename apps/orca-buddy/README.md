@@ -8,6 +8,12 @@ questions, and keyboard prompt drafts. It shares only documented
 `orca-cardputer/v1` messages with `desktop-bridge`; no Claude compatibility
 code, protocol, characters, naming, or assets are used.
 
+The local Orca Desktop plugin source is in [`orca-plugin`](orca-plugin/). Add
+that folder only through **Settings → Plugins → Development**. It is a
+read-only worktree-context and setup panel: it neither installs the bridge nor
+touches a Cardputer. Its guide documents the separate bridge and USB pairing
+steps.
+
 Normal build, package, stage, and serial-monitor entrypoints are exposed only
 through `./cardputer`. Launcher installs the raw app image from `tools/`.
 See [`../../design/orca-cardputer-buddy.md`](../../design/orca-cardputer-buddy.md).

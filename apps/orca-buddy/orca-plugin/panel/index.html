@@ -1,0 +1,72 @@
+<style>
+  :root { color: var(--foreground); background: var(--background); font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { margin: 0; padding: 16px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  h2 { font-size: 13px; margin: 18px 0 6px; }
+  p { margin: 6px 0; }
+  .muted { color: var(--muted-foreground); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); margin-top: 12px; padding: 12px; }
+  .state { color: var(--muted-foreground); margin: 0; }
+  .ok { color: var(--primary); }
+  code { background: var(--secondary); border-radius: 4px; color: var(--secondary-foreground); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 4px; }
+  ol { margin: 6px 0; padding-left: 20px; }
+  li { margin: 4px 0; }
+</style>
+
+<main>
+  <h1>Orca Cardputer Buddy</h1>
+  <p class="muted">Read-only setup panel. No device control or credentials pass through Orca.</p>
+
+  <section class="card" aria-live="polite">
+    <h2>Focused worktree</h2>
+    <p id="worktree" class="state">Reading Orca workspace context…</p>
+  </section>
+
+  <section class="card">
+    <h2>Bridge setup</h2>
+    <ol>
+      <li>Build desktop bridge from this repository.</li>
+      <li>Initialize it with this Mac’s reachable LAN address.</li>
+      <li>Install its per-user LaunchAgent.</li>
+      <li>Configure Wi-Fi on Cardputer, then complete one USB serial pairing.</li>
+    </ol>
+    <p class="muted">Full commands live in this plugin’s README. Plugin does not create, start, or configure the bridge.</p>
+  </section>
+
+  <section class="card">
+    <h2>Security boundary</h2>
+    <p>Device pairing uses protected USB serial material, CA-validated WSS, and a dedicated bearer. This panel requests only <code>workspace.readContext</code>.</p>
+  </section>
+</main>
+
+<script>
+  "use strict";
+
+  const requestId = `workspace-${Date.now()}`;
+  const output = document.getElementById("worktree");
+  const timeout = setTimeout(() => {
+    output.textContent = "Workspace context unavailable.";
+  }, 5000);
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const message = event.data;
+    if (!message || message.type !== "orca-panel-action-result" || message.requestId !== requestId) return;
+    clearTimeout(timeout);
+    if (!message.ok || !message.value) {
+      output.textContent = "No active Orca worktree.";
+      return;
+    }
+    const { displayName, branch, terminals } = message.value;
+    const count = Array.isArray(terminals) ? terminals.length : 0;
+    output.className = "state ok";
+    output.textContent = `${displayName} · ${branch} · ${count} terminal${count === 1 ? "" : "s"}`;
+  });
+
+  window.parent.postMessage({
+    type: "orca-panel-action",
+    requestId,
+    action: "workspace.readContext",
+    params: {}
+  }, "*");
+</script>

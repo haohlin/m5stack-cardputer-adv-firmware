@@ -15,10 +15,11 @@
   its release tag remains blocked on physical Launcher-installed proof.
 - Current Buddy build, install, and debug documentation exposes Launcher-only
   normal workflow; direct flash and erase remain recovery-only.
-- Orca Cardputer Buddy Task 1 adds independent `orca-buddy` metadata,
-  Launcher-compatible PlatformIO contract, root build/release/stage/serial
-  selection, versioning, and a design record. Product firmware, bridge,
-  protocol, pairing implementation, MCP service, and controls remain backlog.
+- Orca Cardputer Buddy now has independent firmware, Launcher-compatible root
+  tooling, CA-validated WSS desktop bridge, protected USB pairing, bounded
+  status protocol, and experimental Orca Desktop development plugin source.
+  Plugin installation is user-reviewed and read-only; bridge lifecycle and
+  device pairing remain explicit companion actions.
 - Claude Buddy BLE, character transfer/parser, transfer failure cleanup, status
   formatting, and host character tools hardened with focused regression coverage.
 - RFID2 serial card writes, arm timeout, persisted input bounds, and Launcher
@@ -71,9 +72,9 @@
 - Task 7c review regressions execute empty-body exact-confirm positive/negative
   parsing plus real pairing CLI success, protected modes, exclusive retry, and
   precondition-failure cleanup.
-- Orca Task 1 root shell/Python contract tests pass. No Orca firmware build,
-  package, staging operation, device install, serial session, or physical proof
-  occurred because this is metadata/tooling only.
+- Orca Buddy host core, desktop bridge, root contract, and plugin package checks
+  pass. Firmware/package staging and physical Launcher/device proof remain
+  separate pending operator action.
 
 ## Pending hardware proof
 

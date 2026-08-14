@@ -47,6 +47,21 @@ owner-only Unix socket. MCP exposes only status, notification, short question,
 and prompt-draft operations. The device is not an MCP server. Pairing
 credentials remain bridge/device-private and are never returned by MCP.
 
+## Orca Desktop plugin boundary
+
+`apps/orca-buddy/orca-plugin` is an experimental Orca Desktop development
+plugin. The user loads its folder through **Settings → Plugins → Development**,
+reviews its manifest, then enables it. It contributes one sidebar panel and
+requests only `workspace:read`; the panel uses Orca's public panel bridge to
+show the active worktree's bounded name, branch, and terminal count.
+
+The plugin has no worker and no network, process, USB, storage, secret, MCP,
+or terminal-send capability. It must not create credentials, bind a socket,
+install a LaunchAgent, change Wi-Fi, or send the USB pairing payload. The
+separate desktop bridge continues to own those security-sensitive actions and
+is explicitly initialized by its documented local command. This keeps an
+experimental plugin API from becoming an implicit device-control boundary.
+
 ## Backlog controls
 
 Orca terminal input, terminal-content relay, worktree/session changes,

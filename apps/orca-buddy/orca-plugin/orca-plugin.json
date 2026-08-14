@@ -1,0 +1,28 @@
+{
+  "manifestVersion": 1,
+  "id": "orca-cardputer",
+  "publisher": "haohlin",
+  "name": "Orca Cardputer Buddy",
+  "version": "0.1.0",
+  "description": "Guided setup and focused-worktree context for Orca Cardputer Buddy.",
+  "repository": "https://github.com/haohlin/m5stack-cardputer-adv-firmware",
+  "engines": {
+    "orca": ">=1.4.180"
+  },
+  "pluginApi": 1,
+  "contributes": {
+    "panels": [
+      {
+        "id": "cardputer",
+        "title": "Cardputer Buddy",
+        "icon": "radio",
+        "entry": "panel/index.html"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    }
+  ]
+}
