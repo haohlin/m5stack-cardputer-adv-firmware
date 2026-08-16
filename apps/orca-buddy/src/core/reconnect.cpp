@@ -18,4 +18,17 @@ bool ReconnectBackoff::deadlineReached(std::uint32_t now,
   return static_cast<std::int32_t>(now - deadline) >= 0;
 }
 
+void StoredWifiRetryPolicy::pause() { paused_ = true; }
+
+void StoredWifiRetryPolicy::resume() { paused_ = false; }
+
+bool StoredWifiRetryPolicy::paused() const { return paused_; }
+
+bool StoredWifiRetryPolicy::shouldAttempt(bool hasStoredWifi,
+                                          std::uint32_t now,
+                                          std::uint32_t deadline) const {
+  return hasStoredWifi && !paused_ &&
+         ReconnectBackoff::deadlineReached(now, deadline);
+}
+
 }  // namespace orca

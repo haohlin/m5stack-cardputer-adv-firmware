@@ -37,6 +37,11 @@ assert_no_local_buddy_header() {
   fi
 }
 
+assert_app_version_contract() {
+  [[ "${APP_ID:-}" == "orca-buddy" ]] || return 0
+  python3 "$APP_DIR/scripts/check_version_contract.py" --app-root "$APP_DIR" >/dev/null
+}
+
 file_size_bytes() {
   if stat -f %z "$1" >/dev/null 2>&1; then
     stat -f %z "$1"
@@ -81,6 +86,7 @@ build_app() {
   local requested="$1"
   load_app "$requested"
   assert_no_local_buddy_header
+  assert_app_version_contract
   "$APP_DIR/scripts/build_cardputer_adv.sh"
 }
 

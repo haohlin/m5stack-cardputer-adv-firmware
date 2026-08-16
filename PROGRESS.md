@@ -21,6 +21,12 @@
   User-reviewed plugin commands explicitly bootstrap/start/status/stop bridge
   and run protected USB pairing; no separate companion UI exists. No command
   runs at install/enable; device and hardware proof remain operator actions.
+- Orca Buddy v0.1.1 retains saved Wi-Fi credentials and directly reconnects to
+  a reachable saved SSID without scanning or password entry. **Del** cancels a
+  connection; **Ctrl + [** is Escape on Cardputer. Cancelling a saved-network
+  retry retains credentials but pauses retry until a later successful/manual
+  connection. Firmware, development plugin, bridge package, and MCP metadata
+  share one visible version; build rejects a mismatch.
 - Claude Buddy BLE, character transfer/parser, transfer failure cleanup, status
   formatting, and host character tools hardened with focused regression coverage.
 - RFID2 serial card writes, arm timeout, persisted input bounds, and Launcher
@@ -80,9 +86,9 @@
   256-byte bursts but drops 512-byte bursts, and its shared Launcher NVS
   rejected the 1,270-byte combined Wi-Fi/pairing record. Sender now resyncs and
   paces frames; firmware falls back to non-formatting app SPIFFS while retaining
-  old NVS state. Host core (10 groups), serial sender (4), plugin (10), and
-  Launcher build (1,072,861 bytes) pass. This artifact is not yet physically
-  installed or paired after the repair.
+  old NVS state. Host core (12 groups), version contract (2), serial sender
+  (4), plugin (10), bridge (26), and Launcher build (1,074,624 bytes) pass.
+  This v0.1.1 artifact is not yet physically installed or paired after repair.
 
 ## Pending hardware proof
 
@@ -90,7 +96,7 @@
 - Install Claude Buddy v1.4.0 through Launcher on physical Cardputer ADV.
 - RFID2: boot/version/status, RFID2 I2C detection, read-only card scan.
 - Claude Buddy: boot, USB serial, BLE advertising/pairing, permission prompt.
-- Orca Buddy: install current artifact through Launcher, pair through Orca
+- Orca Buddy: install current v0.1.1 artifact through Launcher, pair through Orca
   Command Palette over USB, then confirm WSS connected state and public Orca
   worktree summary over Wi-Fi.
 

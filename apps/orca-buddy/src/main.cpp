@@ -23,6 +23,7 @@ namespace {
 constexpr std::uint32_t kWifiConnectTimeoutMs = 15000;
 constexpr std::size_t kMaximumSerialCommandBytes = 12288;
 constexpr std::size_t kVisibleRows = 4;
+constexpr std::uint8_t kHidLeftBracket = 0x2f;
 constexpr const char* kFallbackConfigPath = "/orca-buddy-config.bin";
 constexpr const char* kFallbackStagingPath = "/orca-buddy-config.next";
 constexpr const char* kFallbackPreviousPath = "/orca-buddy-config.prev";
@@ -157,6 +158,7 @@ orca::FallbackConfigStore configStore(preferencesConfigStore, spiffsConfigStore)
 orca::ConfigManager configManager(configStore);
 orca::ConsoleModel consoleModel;
 orca::ReconnectBackoff reconnectBackoff;
+orca::StoredWifiRetryPolicy storedWifiRetry;
 WebSocketsClient webSocket;
 
 UiMode uiMode = UiMode::Console;
@@ -183,6 +185,16 @@ bool hasWord(const Keyboard_Class::KeysState& keys, char first,
     if (value == first || (second != '\0' && value == second)) return true;
   }
   return false;
+}
+
+bool hasHidKey(const Keyboard_Class::KeysState& keys, std::uint8_t key) {
+  return std::find(keys.hid_keys.begin(), keys.hid_keys.end(), key) !=
+         keys.hid_keys.end();
+}
+
+// Cardputer has no physical Escape key. Ctrl+[ is its standard Escape chord.
+bool wifiCancelRequested(const Keyboard_Class::KeysState& keys) {
+  return keys.del || (keys.ctrl && hasHidKey(keys, kHidLeftBracket));
 }
 
 std::string clipped(const std::string& value, std::size_t maximum) {
@@ -300,18 +312,43 @@ void beginWifiAttempt(const orca::WifiConfig& wifi, WifiAttempt attempt) {
   wifiAttempt = attempt;
   wifiAttemptDeadline = millis() + kWifiConnectTimeoutMs;
   uiMode = UiMode::WifiConnecting;
-  setStatus("CONNECTING", "Testing Wi-Fi");
+  setStatus("CONNECTING", attempt == WifiAttempt::Stored
+                               ? "Connecting saved Wi-Fi"
+                               : "Testing Wi-Fi");
 }
 
 void beginStoredWifi() {
-  if (!configManager.active().hasWifi) return;
+  if (!configManager.active().hasWifi || storedWifiRetry.paused()) return;
   beginWifiAttempt(configManager.active().wifi, WifiAttempt::Stored);
 }
 
 void scheduleStoredReconnect() {
   if (!configManager.active().hasWifi) return;
+  if (storedWifiRetry.paused()) {
+    setStatus("OFFLINE", "Wi-Fi reconnect paused");
+    return;
+  }
   nextReconnectAt = millis() + reconnectBackoff.nextDelayMs();
   setStatus("RECONNECT", "Wi-Fi retry scheduled");
+}
+
+void cancelWifiAttempt() {
+  const WifiAttempt cancelled = wifiAttempt;
+  if (cancelled == WifiAttempt::None) return;
+
+  wifiAttempt = WifiAttempt::None;
+  WiFi.disconnect(false, false);
+  wifiWasConnected = false;
+  nextReconnectAt = 0;
+  if (cancelled == WifiAttempt::Stored) {
+    storedWifiRetry.pause();
+    uiMode = UiMode::Console;
+    setStatus("OFFLINE", "Wi-Fi reconnect paused");
+  } else {
+    uiMode = candidateWifi.passphrase.empty() ? UiMode::WifiScan
+                                               : UiMode::WifiPassword;
+    setStatus("CANCELLED", "Wi-Fi connection cancelled");
+  }
 }
 
 void startWifiScan() {
@@ -347,6 +384,7 @@ void completeWifiAttempt() {
   const WifiAttempt completed = wifiAttempt;
   wifiAttempt = WifiAttempt::None;
   reconnectBackoff.reset();
+  storedWifiRetry.resume();
   wifiWasConnected = true;
   if (completed == WifiAttempt::Candidate) {
     if (!configManager.updateWifi(candidateWifi)) {
@@ -400,8 +438,9 @@ void pollWifi() {
       stopWebSocket();
       scheduleStoredReconnect();
     }
-    if (uiMode == UiMode::Console && configManager.active().hasWifi &&
-        orca::ReconnectBackoff::deadlineReached(millis(), nextReconnectAt)) {
+    if (uiMode == UiMode::Console && storedWifiRetry.shouldAttempt(
+                                     configManager.active().hasWifi, millis(),
+                                     nextReconnectAt)) {
       beginStoredWifi();
     }
   }
@@ -509,6 +548,22 @@ void drawPassword() {
   M5.Display.print("Type key  Del  Enter test");
 }
 
+void drawWifiConnecting() {
+  drawHeader();
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(5, 34);
+  M5.Display.print(wifiAttempt == WifiAttempt::Stored ? "Saved Wi-Fi" : "Selected Wi-Fi");
+  M5.Display.setCursor(5, 52);
+  M5.Display.print("Connecting...");
+  M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+  M5.Display.setCursor(5, 78);
+  M5.Display.print(clipped(detailText, 38).c_str());
+  M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  M5.Display.setCursor(5, 120);
+  M5.Display.print("Del / Ctrl+[ cancel");
+}
+
 void drawPrompt() {
   drawHeader();
   M5.Display.setTextSize(1);
@@ -528,6 +583,7 @@ void drawScreen() {
   M5.Display.fillScreen(TFT_BLACK);
   if (uiMode == UiMode::WifiScan) drawWifiScan();
   else if (uiMode == UiMode::WifiPassword) drawPassword();
+  else if (uiMode == UiMode::WifiConnecting) drawWifiConnecting();
   else if (uiMode == UiMode::Prompt) drawPrompt();
   else if (uiMode == UiMode::ForgetConfirm) {
     drawHeader();
@@ -550,6 +606,7 @@ void performForget() {
   stopWebSocket();
   WiFi.disconnect(true, false);
   wifiAttempt = WifiAttempt::None;
+  storedWifiRetry.resume();
   wifiWasConnected = false;
   candidateWifi = {};
   consoleModel = orca::ConsoleModel{};
@@ -673,6 +730,10 @@ void appendTypedWords(const Keyboard_Class::KeysState& keys,
 void handleKeyboard() {
   if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) return;
   const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
+  if (uiMode == UiMode::WifiConnecting) {
+    if (wifiCancelRequested(keys)) cancelWifiAttempt();
+    return;
+  }
   if (uiMode == UiMode::WifiScan) {
     if ((hasWord(keys, ';', ':')) && selectedWifi > 0) --selectedWifi;
     else if (hasWord(keys, '.', '>') && selectedWifi + 1 < wifiChoices.size()) ++selectedWifi;
@@ -726,7 +787,6 @@ void handleKeyboard() {
     }
     return;
   }
-  if (uiMode == UiMode::WifiConnecting) return;
   handleConsoleKeys(keys);
 }
 

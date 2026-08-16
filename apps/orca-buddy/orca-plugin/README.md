@@ -31,8 +31,11 @@ First install `orca-buddy` through Cardputer **Launcher**: use collection
 build/release/stage path, then select staged raw image from Launcher `tools/`
 and choose **Install**. Do not direct-flash this app.
 
-On Cardputer, press `W`, select reachable Wi-Fi, and enter passphrase. Then
-use Orca Command Palette in this order:
+On Cardputer, press `W`, select reachable Wi-Fi, and enter passphrase once.
+Firmware remembers it and directly reconnects whenever that SSID is reachable;
+it does not rescan or ask again. While a connection is pending, **Del** cancels
+it; **Ctrl + [** is Escape on Cardputer. Then use Orca Command Palette in this
+order:
 
 1. **Orca Cardputer: Enable Bridge**
 2. Attach Cardputer USB data cable.

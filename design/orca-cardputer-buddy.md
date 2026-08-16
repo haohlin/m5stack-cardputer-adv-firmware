@@ -3,7 +3,7 @@
 ## v0.1 boundary
 
 `orca-buddy` is an independent app identity: `Orca Cardputer Buddy`, version
-`0.1.0`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
+`0.1.1`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
 independent firmware plus a local macOS bridge and MCP adapter. It does not use
 a Claude compatibility layer, characters, Claude graphics, private Orca hooks,
 terminal-content collection, or any Orca control protocol. The only automatic
@@ -38,7 +38,12 @@ source, artifacts, public logs, manifests, display, or MCP replies. Plain WS,
 query-token pairing, unauthenticated peers, certificate bypass, and implicit
 Wi-Fi pairing are outside contract. Wi-Fi SSID/passphrase are selected and
 entered on Cardputer, then stored with the complete versioned/checksummed
-configuration blob.
+configuration blob. Firmware uses direct station association at boot and after
+dropout, so a reachable saved SSID reconnects without a scan or passphrase
+prompt. Owner cancellation during a saved-network attempt leaves credentials
+unchanged but pauses automatic retries; **Del** cancels, and standard
+Cardputer **Ctrl + [** supplies Escape because its keyboard has no physical
+Escape key. A later successful or manual connection resumes retry policy.
 
 Launcher preserves one shared NVS partition across apps. Normal Orca Buddy
 configuration writes use its `orca-buddy` NVS record. If that record rejects a
@@ -94,6 +99,15 @@ payload created, USB transfer begun, device acknowledgement, unavailable USB,
 missing acknowledgement, device rejection, or saved-config failure. It never
 logs subprocess output, payload content, bearer, CA, Wi-Fi credentials, or
 serial input.
+
+## Version visibility
+
+Every Orca Buddy change increments one shared patch version in firmware
+`app.env`, development plugin manifest, and desktop bridge package/MCP
+metadata. Launcher artifact filenames and Orca plugin list therefore expose
+the same release value. A version displayed as older means Orca has not yet
+reloaded the selected development folder; it is not evidence that a newer
+firmware image is installed.
 
 ## Backlog controls
 

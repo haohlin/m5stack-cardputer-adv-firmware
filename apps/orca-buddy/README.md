@@ -1,6 +1,6 @@
 # Orca Cardputer Buddy
 
-Independent Orca Cardputer app contract, version `0.1.0`.
+Independent Orca Cardputer app contract, version `0.1.1`.
 
 Firmware provides an independent Orca status console, local Wi-Fi setup,
 secure USB serial pairing, CA-validated WSS transport, notices, bounded
@@ -25,9 +25,13 @@ bash apps/orca-buddy/tests/run_host_tests.sh
 ./cardputer build orca-buddy
 ```
 
-Device setup scans Wi-Fi and accepts a keyed passphrase locally. Generate the
-single protected `orca-pair` payload with desktop bridge management tooling,
-then send it without revealing contents:
+First setup scans Wi-Fi and accepts a keyed passphrase locally. Firmware saves
+that network, then directly re-associates at every boot/reconnect when it is in
+range; no rescan or password re-entry. During a connection attempt, press
+**Del** to cancel or **Ctrl + [** for Escape. Cancelling a saved-network retry
+keeps credentials but pauses automatic retry until a later successful/manual
+connection. Generate single protected `orca-pair` payload with desktop bridge
+management tooling, then send it without revealing contents:
 
 ```sh
 ./apps/orca-buddy/scripts/write_pairing_serial.sh "$PAIR_FILE" [serial-port]

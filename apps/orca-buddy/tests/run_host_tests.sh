@@ -17,3 +17,4 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
   -o "$BUILD_DIR/orca-buddy-host-tests"
 
 "$BUILD_DIR/orca-buddy-host-tests"
+python3 "$APP_ROOT/tests/test_version_contract.py"

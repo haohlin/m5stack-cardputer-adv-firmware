@@ -337,6 +337,21 @@ void testReconnectBackoff() {
   CHECK(orca::ReconnectBackoff::deadlineReached(0x00000010u, 0xfffffff0u));
 }
 
+void testStoredWifiRetryPolicyHonorsUserCancellation() {
+  orca::StoredWifiRetryPolicy policy;
+  CHECK(policy.shouldAttempt(true, 1000, 1000));
+  CHECK(!policy.shouldAttempt(false, 1000, 1000));
+  CHECK(!policy.shouldAttempt(true, 999, 1000));
+
+  policy.pause();
+  CHECK(policy.paused());
+  CHECK(!policy.shouldAttempt(true, 1000, 1000));
+
+  policy.resume();
+  CHECK(!policy.paused());
+  CHECK(policy.shouldAttempt(true, 1000, 1000));
+}
+
 }  // namespace
 
 int main() {
@@ -351,10 +366,11 @@ int main() {
   testFrameParserAndNamedMessages();
   testDeviceMessageEncoding();
   testReconnectBackoff();
+  testStoredWifiRetryPolicyHonorsUserCancellation();
   if (failures != 0) {
     std::cerr << failures << " host test(s) failed\n";
     return EXIT_FAILURE;
   }
-  std::cout << "PASS: 11 Orca Buddy host behavior groups\n";
+  std::cout << "PASS: 12 Orca Buddy host behavior groups\n";
   return EXIT_SUCCESS;
 }
