@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, lstat, mkdir, open } from "node:fs/promises";
 import { homedir, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +19,30 @@ const FAILURE_MESSAGES = Object.freeze({
   "pair-storage": "device rejected pairing because its saved configuration could not be updated",
   "pair-no-ack": "device did not acknowledge USB pairing within 8 seconds",
   "pair-rejected": "device rejected USB pairing",
-  "pair-usb": "Cardputer USB serial connection is unavailable",
+  "pair-usb-none": "no Cardputer USB serial port detected",
+  "pair-usb-multiple": "multiple USB serial ports detected; leave only Cardputer connected",
   "pair-sender": "local USB pairing sender failed",
+});
+
+const DIAGNOSTIC_EVENTS = new Set([
+  "pair.payload-created",
+  "pair.usb-transfer-begin",
+  "pair.device-acknowledged",
+  "pair.failed.storage",
+  "pair.failed.no-ack",
+  "pair.failed.rejected",
+  "pair.failed.usb-none",
+  "pair.failed.usb-multiple",
+  "pair.failed.sender",
+]);
+
+const DIAGNOSTIC_EVENT_FOR_FAILURE = Object.freeze({
+  "pair-storage": "pair.failed.storage",
+  "pair-no-ack": "pair.failed.no-ack",
+  "pair-rejected": "pair.failed.rejected",
+  "pair-usb-none": "pair.failed.usb-none",
+  "pair-usb-multiple": "pair.failed.usb-multiple",
+  "pair-sender": "pair.failed.sender",
 });
 
 export const COMMANDS = Object.freeze({
@@ -71,7 +94,36 @@ function bridgePaths(home) {
     config: join(root, "config.json"),
     launchAgent: join(home, "Library", "LaunchAgents", "com.haohanlin.orca-cardputer-bridge.plist"),
     exportDirectory: join(root, "export"),
+    logDirectory: join(root, "logs"),
+    diagnosticLog: join(root, "logs", "plugin-events.jsonl"),
   };
+}
+
+async function appendDiagnostic(paths, event) {
+  if (!DIAGNOSTIC_EVENTS.has(event)) return;
+  try {
+    await mkdir(paths.logDirectory, { recursive: true, mode: 0o700 });
+    await chmod(paths.logDirectory, 0o700);
+    try {
+      const existing = await lstat(paths.diagnosticLog);
+      if (!existing.isFile() || existing.isSymbolicLink()) return;
+    } catch (error) {
+      if (error?.code !== "ENOENT") return;
+    }
+    const file = await open(
+      paths.diagnosticLog,
+      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      await file.writeFile(`${JSON.stringify({ timestamp: new Date().toISOString(), event })}\n`);
+    } finally {
+      await file.close();
+    }
+    await chmod(paths.diagnosticLog, 0o600);
+  } catch {
+    // Diagnostics must never make the explicit pairing path less reliable.
+  }
 }
 
 async function runFixed(executable, args, options) {
@@ -105,10 +157,11 @@ function classifyPairingSenderFailure(error) {
     return cardputerFailure("pair-no-ack");
   }
   if (output.includes("device rejected pairing:")) return cardputerFailure("pair-rejected");
-  if (output.includes("no unique Cardputer USB serial port detected") ||
+  if (output.includes("Cardputer USB serial port not detected.") ||
       output.includes("could not open port") || output.includes("Device not configured")) {
-    return cardputerFailure("pair-usb");
+    return cardputerFailure("pair-usb-none");
   }
+  if (output.includes("Multiple Cardputer USB serial ports detected.")) return cardputerFailure("pair-usb-multiple");
   return cardputerFailure("pair-sender");
 }
 
@@ -150,7 +203,7 @@ export function createBridgeRuntime({
     await ensureBridgeBuild();
     const { stdout } = await runNode(["status"]);
     const state = stdout.trim();
-    if (state === "running" || state === "stopped") return state;
+    if (state === "running" || state === "stopped" || state === "failed") return state;
     throw new Error("local bridge returned an invalid status");
   }
 
@@ -163,7 +216,10 @@ export function createBridgeRuntime({
         const host = selectUniquePrivateIpv4(interfaces());
         await runNode(["init", "--host", host, "--port", BRIDGE_PORT], 90_000);
       }
-      if (await regularFile(paths.launchAgent)) await runNode(["start"]);
+      if (state === "failed" && await regularFile(paths.launchAgent)) {
+        await runNode(["stop"]);
+      }
+      if (await regularFile(paths.launchAgent) && state !== "failed") await runNode(["start"]);
       else await runNode(["install"]);
       state = await bridgeStatus();
       if (state !== "running") throw new Error("local bridge did not start");
@@ -175,9 +231,11 @@ export function createBridgeRuntime({
       if (!(await regularFile(paths.config))) throw new Error("bridge is not configured");
       const output = join(paths.exportDirectory, `orca-pair-${Date.now()}-${randomUUID()}.txt`);
       await runNode(["provision", output]);
+      await appendDiagnostic(paths, "pair.payload-created");
       progress("pair: protected payload created");
       const serialEnvironment = { ...process.env };
       delete serialEnvironment.CARDPUTER_ADV_PORT;
+      await appendDiagnostic(paths, "pair.usb-transfer-begin");
       progress("pair: sending protected USB payload");
       try {
         await run("/bin/bash", [pairingSender, output], {
@@ -186,8 +244,12 @@ export function createBridgeRuntime({
           timeout: 20_000,
         });
       } catch (error) {
-        throw classifyPairingSenderFailure(error);
+        const failure = classifyPairingSenderFailure(error);
+        await appendDiagnostic(paths, DIAGNOSTIC_EVENT_FOR_FAILURE[failure.cardputerFailure] ?? "pair.failed.sender");
+        progress(`pair: failed ${failure.cardputerFailure}`);
+        throw failure;
       }
+      await appendDiagnostic(paths, "pair.device-acknowledged");
       progress("pair: device acknowledged pairing");
     },
 
@@ -197,7 +259,7 @@ export function createBridgeRuntime({
 
     async disable() {
       const state = await bridgeStatus();
-      if (state !== "running") return state;
+      if (state === "stopped" || state === "not configured") return state;
       await runNode(["stop"]);
       return bridgeStatus();
     },

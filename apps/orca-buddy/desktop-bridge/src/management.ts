@@ -14,6 +14,7 @@ export interface CommandOptions {
   uid: number;
   launchctlPath: string;
   bridgeExecutable: string;
+  launchPath?: string;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -193,11 +194,13 @@ export async function installLaunchAgent(options: CommandOptions): Promise<{ pli
   const paths = bridgePaths(options.home);
   await preserveExistingDirectory(paths.launchAgents);
   await protectedDirectory(paths.logs);
+  const launchPath = options.launchPath ?? process.env.PATH ?? "/usr/bin:/bin";
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>${LAUNCH_AGENT_LABEL}</string>
-<key>ProgramArguments</key><array><string>${xml(options.bridgeExecutable)}</string></array>
+<key>ProgramArguments</key><array><string>${xml(process.execPath)}</string><string>${xml(options.bridgeExecutable)}</string></array>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(launchPath)}</string></dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 <key>StandardOutPath</key><string>${xml(paths.stdoutLog)}</string>
 <key>StandardErrorPath</key><string>${xml(paths.stderrLog)}</string>
@@ -220,7 +223,8 @@ export async function stopLaunchAgent(options: CommandOptions): Promise<void> {
 
 export async function statusLaunchAgent(options: CommandOptions): Promise<{ output: string }> {
   try {
-    await run(options.launchctlPath, ["print", `gui/${options.uid}/${LAUNCH_AGENT_LABEL}`], options.env);
+    const { stdout } = await run(options.launchctlPath, ["print", `gui/${options.uid}/${LAUNCH_AGENT_LABEL}`], options.env);
+    if (/last exit code = [1-9][0-9]*/.test(stdout)) return { output: "failed\n" };
     return { output: "running\n" };
   } catch (error) {
     if (typeof (error as NodeJS.ErrnoException).code === "number") return { output: "stopped\n" };

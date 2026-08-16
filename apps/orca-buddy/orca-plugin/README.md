@@ -65,14 +65,22 @@ its previous configuration; current firmware automatically falls back from
 shared Launcher NVS to its app SPIFFS record without formatting or erasing
 Wi-Fi settings.
 
+Pairing requires a Cardputer USB serial device; being on Wi-Fi is not enough
+until pairing has succeeded once. A missing serial port now reports that exact
+condition, and multiple ports ask for other serial devices to be unplugged.
+For later diagnosis, plugin records only fixed lifecycle stages and error
+classes in mode-0600
+`~/.orca-cardputer-bridge/logs/plugin-events.jsonl`; it never records pairing
+payloads, tokens, certificates, Wi-Fi credentials, or raw USB output.
+
 After USB disconnect, firmware reconnects automatically through CA-validated
 WSS to bridge on Mac. Device screen should show connected state plus public
 Orca status/worktree summary. No desktop companion window involved.
 
 ## Status and stop
 
-- **Orca Cardputer: Bridge Status** posts generic `running`, `stopped`, or
-  `not configured` desktop notification. Cardputer remains live status source.
+- **Orca Cardputer: Bridge Status** posts `running`, `stopped`, `failed`, or
+  `not configured`. `failed` means launchd recorded a nonzero daemon exit.
 - **Orca Cardputer: Disable Bridge** stops LaunchAgent but keeps protected
   pairing state. Re-run **Enable Bridge** to restore it.
 

@@ -65,6 +65,7 @@ if (process.argv[2] === "print") process.stdout.write("state = running\\npath = 
     uid: 501,
     launchctlPath: launchctl,
     bridgeExecutable: "/Applications/Orca Buddy/orca-cardputer-bridge",
+    launchPath: "/opt/homebrew/bin:/usr/bin:/bin",
     env: { ...process.env, ARGUMENT_LOG: argumentLog }
   };
 
@@ -73,6 +74,8 @@ if (process.argv[2] === "print") process.stdout.write("state = running\\npath = 
   await chmod(launchAgents, 0o755);
   const installed = await installLaunchAgent(options);
   const plist = await readFile(installed.plistPath, "utf8");
+  assert.match(plist, new RegExp(`<string>${process.execPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</string><string>/Applications/Orca Buddy/orca-cardputer-bridge</string>`));
+  assert.match(plist, /<key>EnvironmentVariables<\/key><dict><key>PATH<\/key><string>\/opt\/homebrew\/bin:\/usr\/bin:\/bin<\/string><\/dict>/);
   assert.match(plist, /Orca Buddy\/orca-cardputer-bridge/);
   assert.doesNotMatch(plist, /token|bearer|private key/i);
   assert.equal((await stat(installed.plistPath)).mode & 0o777, 0o600);
@@ -91,6 +94,22 @@ if (process.argv[2] === "print") process.stdout.write("state = running\\npath = 
     ["bootout", "gui/501", installed.plistPath]
   ]);
   await assert.rejects(() => stat(installed.plistPath));
+});
+
+test("LaunchAgent status reports failed when launchd records a nonzero exit", async () => {
+  const home = await temporaryDirectory("orca-launch-status-home-");
+  const tools = await temporaryDirectory("orca-launch-status-tools-");
+  const launchctl = join(tools, "launchctl");
+  await writeExecutable(launchctl, `#!/usr/bin/env node
+if (process.argv[2] === "print") process.stdout.write("state = spawn scheduled\\nlast exit code = 78: EX_CONFIG\\n");
+`);
+  const output = await statusLaunchAgent({
+    home,
+    uid: 501,
+    launchctlPath: launchctl,
+    bridgeExecutable: "/unused",
+  });
+  assert.equal(output.output, "failed\n");
 });
 
 test("initialization rejects normalized unspecified IPv6 before invoking OpenSSL", async () => {

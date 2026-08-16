@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { readFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { mkdtemp } from "node:fs/promises";
 
 import activate, { COMMANDS, createBridgeRuntime, createPluginController, selectUniquePrivateIpv4 } from "../main.mjs";
 
@@ -213,6 +217,41 @@ test("pair emits secret-free progress at each host-device boundary", async () =>
     "pair: device acknowledged pairing",
   ]);
   assert.doesNotMatch(progress.join(" "), /bearer|token|certificate|private/i);
+});
+
+test("pair stores only safe USB-unavailable diagnostics for later debugging", async () => {
+  const bridgeRoot = "/repo/apps/orca-buddy/desktop-bridge";
+  const bridgeCli = `${bridgeRoot}/dist/bin/orca-cardputer.js`;
+  const bridgeWsModule = `${bridgeRoot}/node_modules/ws/index.js`;
+  const home = await mkdtemp(join(tmpdir(), "orca-cardputer-plugin-"));
+  const config = `${home}/.orca-cardputer-bridge/config.json`;
+  const runtime = createBridgeRuntime({
+    pluginRoot: "/repo/apps/orca-buddy/orca-plugin",
+    bridgeRoot,
+    bridgeCli,
+    bridgeWsModule,
+    pairingSender: "/repo/apps/orca-buddy/scripts/write_pairing_serial.sh",
+    home,
+    regularFile: async (path) => path === bridgeCli || path === bridgeWsModule || path === config,
+    run: async (executable, args) => {
+      if (executable === "node" && args[1] === "provision") return { stdout: "", stderr: "" };
+      if (executable === "/bin/bash") {
+        throw Object.assign(new Error("sender failed"), {
+          stderr: "Cardputer USB serial port not detected.",
+        });
+      }
+      throw new Error("unexpected command");
+    },
+  });
+
+  await assert.rejects(() => runtime.pair(), (error) => error?.cardputerFailure === "pair-usb-none");
+  const log = join(home, ".orca-cardputer-bridge", "logs", "plugin-events.jsonl");
+  const content = await readFile(log, "utf8");
+  assert.match(content, /pair\.payload-created/);
+  assert.match(content, /pair\.usb-transfer-begin/);
+  assert.match(content, /pair\.failed\.usb-none/);
+  assert.doesNotMatch(content, /bearer|token|certificate|private/i);
+  assert.equal((await stat(log)).mode & 0o777, 0o600);
 });
 
 test("activate registers same fixed command set with Orca host", () => {

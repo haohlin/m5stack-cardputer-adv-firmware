@@ -46,8 +46,12 @@ main() {
   done
   shopt -u nullglob
 
+  if [[ ${#ports[@]} -eq 0 ]]; then
+    printf 'Cardputer USB serial port not detected.\n' >&2
+    exit 1
+  fi
   if [[ ${#ports[@]} -ne 1 ]]; then
-    printf 'Pass one Cardputer ADV USB serial port explicitly.\n' >&2
+    printf 'Multiple Cardputer USB serial ports detected.\n' >&2
     exit 1
   fi
 

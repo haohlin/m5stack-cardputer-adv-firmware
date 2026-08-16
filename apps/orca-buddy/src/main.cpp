@@ -10,6 +10,7 @@
 #include "orca/protocol.h"
 #include "orca/reconnect.h"
 #include "orca/ui_model.h"
+#include "version.h"
 
 #include <algorithm>
 #include <cctype>
@@ -452,7 +453,8 @@ void drawHeader() {
   M5.Display.setTextSize(1);
   M5.Display.setTextColor(TFT_WHITE, TFT_NAVY);
   M5.Display.setCursor(5, 6);
-  M5.Display.print("ORCA STATUS");
+  M5.Display.print("ORCA ");
+  M5.Display.print(ORCA_BUDDY_VERSION);
   const std::string status = consoleModel.hasQuestion() ? "ATTENTION" : statusText;
   M5.Display.setCursor(150, 6);
   M5.Display.print(clipped(status, 13).c_str());

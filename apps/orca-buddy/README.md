@@ -1,6 +1,8 @@
 # Orca Cardputer Buddy
 
-Independent Orca Cardputer app contract, version `0.1.1`.
+Independent Orca Cardputer app contract, version `0.1.2`. Firmware header
+shows this version on device and release checks keep it equal to bridge/plugin
+metadata.
 
 Firmware provides an independent Orca status console, local Wi-Fi setup,
 secure USB serial pairing, CA-validated WSS transport, notices, bounded
@@ -41,3 +43,12 @@ The firmware accepts one complete `orca-pair` line and emits only a success or
 failure acknowledgement. `W` scans and configures Wi-Fi on-device; `F` opens a
 local forget confirmation; `P` enters a prompt draft. Pairing bearer and CA
 contents are never shown. Normal workflow has no direct-flash helper.
+
+If pairing fails, use **Orca Cardputer: Bridge Status** first. It reports
+`failed` when launchd records a nonzero bridge exit rather than treating a
+loaded-but-dead service as running. The plugin also writes mode-0600,
+secret-free lifecycle records at
+`~/.orca-cardputer-bridge/logs/plugin-events.jsonl`: payload-created,
+USB-transfer-begin, device acknowledgement, or a fixed failure class. These
+records never contain payloads, tokens, certificates, Wi-Fi credentials, raw
+serial output, or subprocess text.

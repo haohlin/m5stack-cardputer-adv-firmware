@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 VERSION_LINE = re.compile(r'^APP_VERSION="([0-9]+\.[0-9]+\.[0-9]+)"\s*$', re.MULTILINE)
+FIRMWARE_VERSION_LINE = re.compile(
+    r'^#define ORCA_BUDDY_VERSION "([0-9]+\.[0-9]+\.[0-9]+)"\s*$', re.MULTILINE
+)
 
 
 def read_app_version(path: Path) -> str:
@@ -26,6 +29,13 @@ def read_json_version(path: Path) -> str:
     return version
 
 
+def read_firmware_version(path: Path) -> str:
+    match = FIRMWARE_VERSION_LINE.search(path.read_text(encoding="utf-8"))
+    if match is None:
+        raise ValueError(f"{path.relative_to(path.parents[2])}: missing ORCA_BUDDY_VERSION=X.Y.Z")
+    return match.group(1)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -35,6 +45,7 @@ def main() -> int:
     try:
         expected = read_app_version(root / "app.env")
         versions = {
+            "src/version.h": read_firmware_version(root / "src" / "version.h"),
             "orca-plugin/orca-plugin.json": read_json_version(root / "orca-plugin" / "orca-plugin.json"),
             "desktop-bridge/package.json": read_json_version(root / "desktop-bridge" / "package.json"),
             "desktop-bridge/package-lock.json": read_json_version(root / "desktop-bridge" / "package-lock.json"),
