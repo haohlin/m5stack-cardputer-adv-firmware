@@ -80,6 +80,44 @@ test("bridge runtime uses fixed local commands and a single private LAN address"
   assert.equal(calls.every(({ options }) => options.cwd === bridgeRoot), true);
 });
 
+test("bridge runtime explicitly repairs a stale LAN binding and requires new USB pairing", async () => {
+  const bridgeRoot = "/repo/apps/orca-buddy/desktop-bridge";
+  const bridgeCli = `${bridgeRoot}/dist/bin/orca-cardputer.js`;
+  const bridgeWsModule = `${bridgeRoot}/node_modules/ws/index.js`;
+  const home = "/home/tester";
+  const config = `${home}/.orca-cardputer-bridge/config.json`;
+  const launchAgent = `${home}/Library/LaunchAgents/com.haohanlin.orca-cardputer-bridge.plist`;
+  const calls = [];
+  let statusCalls = 0;
+  const runtime = createBridgeRuntime({
+    pluginRoot: "/repo/apps/orca-buddy/orca-plugin",
+    bridgeRoot,
+    bridgeCli,
+    bridgeWsModule,
+    home,
+    interfaces: () => ({ en0: [{ family: "IPv4", address: "172.20.10.6", internal: false }] }),
+    regularFile: async (path) => path === bridgeCli || path === bridgeWsModule || path === config || path === launchAgent,
+    readConfig: async () => JSON.stringify({ listenAddress: "192.168.31.209" }),
+    run: async (executable, args, options) => {
+      calls.push({ executable, args, options });
+      if (executable === "node" && args[1] === "status") {
+        statusCalls += 1;
+        return { stdout: statusCalls === 1 ? "failed\n" : "running\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+  });
+
+  assert.equal(await runtime.enable(), "running");
+  assert.deepEqual(calls.map(({ executable, args }) => [executable, args]), [
+    ["node", [bridgeCli, "status"]],
+    ["node", [bridgeCli, "stop"]],
+    ["node", [bridgeCli, "init", "--host", "172.20.10.6", "--port", "17654", "--replace"]],
+    ["node", [bridgeCli, "install"]],
+    ["node", [bridgeCli, "status"]],
+  ]);
+});
+
 test("controller registers fixed commands and never exposes pairing material", async () => {
   const calls = [];
   const notices = [];

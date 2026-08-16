@@ -15,6 +15,7 @@ import {
 
 const usage = `Usage:
   orca-cardputer init [--host ADDRESS] [--port PORT]
+  orca-cardputer init --replace [--host ADDRESS] [--port PORT]
   orca-cardputer install | start | stop | status | uninstall
   orca-cardputer provision OUTPUT_FILE
   orca-cardputer mcp install | remove
@@ -43,12 +44,15 @@ export async function runManagementCli(args = process.argv.slice(2)): Promise<vo
     case "init": {
       const host = option(args, "--host");
       const portText = option(args, "--port");
-      const allowed = new Set(["init", "--host", host, "--port", portText].filter((value): value is string => value !== undefined));
+      const replace = args.includes("--replace");
+      if (args.filter((value) => value === "--replace").length > 1) throw new Error(usage);
+      const allowed = new Set(["init", "--host", host, "--port", portText, ...(replace ? ["--replace"] : [])].filter((value): value is string => value !== undefined));
       if (args.some((value) => !allowed.has(value))) throw new Error(usage);
       const result = await initializeBridge({
         home,
         ...(host === undefined ? {} : { host }),
-        ...(portText === undefined ? {} : { port: Number(portText) })
+        ...(portText === undefined ? {} : { port: Number(portText) }),
+        ...(replace ? { replace: true } : {})
       });
       process.stdout.write(`${result.terminalMessage}\n`);
       return;

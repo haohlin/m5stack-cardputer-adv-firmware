@@ -21,17 +21,18 @@
   User-reviewed plugin commands explicitly bootstrap/start/status/stop bridge
   and run protected USB pairing; no separate companion UI exists. No command
   runs at install/enable; device and hardware proof remain operator actions.
-- Orca Buddy v0.1.2 retains saved Wi-Fi credentials and directly reconnects to
+- Orca Buddy v0.1.3 retains saved Wi-Fi credentials and directly reconnects to
   a reachable saved SSID without scanning or password entry. **Del** cancels a
   connection; **Ctrl + [** is Escape on Cardputer. Cancelling a saved-network
   retry retains credentials but pauses retry until a later successful/manual
   connection. Firmware, development plugin, bridge package, and MCP metadata
   share one visible version; build rejects a mismatch.
-- Orca Buddy v0.1.2 pairing diagnosis now distinguishes no USB serial port from
+- Orca Buddy v0.1.3 pairing diagnosis now distinguishes no USB serial port from
   multiple ports, writes a protected secret-free plugin event log, and reports
   failed launchd jobs instead of calling them running. LaunchAgent runs Node
   explicitly and inherits the desktop PATH needed to find the official `orca`
-  executable.
+  executable. Explicit Enable Bridge replaces a stale LAN endpoint and records
+  that a fresh USB pairing is required.
 - Claude Buddy BLE, character transfer/parser, transfer failure cleanup, status
   formatting, and host character tools hardened with focused regression coverage.
 - RFID2 serial card writes, arm timeout, persisted input bounds, and Launcher
@@ -92,8 +93,8 @@
   rejected the 1,270-byte combined Wi-Fi/pairing record. Sender now resyncs and
   paces frames; firmware falls back to non-formatting app SPIFFS while retaining
   old NVS state. Host core (12 groups), version contract (2), serial sender
-  (4), plugin (11), bridge (27), and Launcher build (1,074,273 bytes) pass.
-  Current v0.1.2 artifact is not yet physically installed or paired after
+  (4), plugin (12), bridge (28), and Launcher build (1,074,273 bytes) pass.
+  Current v0.1.3 artifact is not yet physically installed or paired after
   diagnosis repair.
 
 ## Pending hardware proof
@@ -102,7 +103,7 @@
 - Install Claude Buddy v1.4.0 through Launcher on physical Cardputer ADV.
 - RFID2: boot/version/status, RFID2 I2C detection, read-only card scan.
 - Claude Buddy: boot, USB serial, BLE advertising/pairing, permission prompt.
-- Orca Buddy: install current v0.1.2 artifact through Launcher, then pair through
+- Orca Buddy: install current v0.1.3 artifact through Launcher, then pair through
   Orca Command Palette while a USB **data** serial port is present. Wi-Fi only
   carries runtime WSS after pairing. Confirm WSS connected state and public Orca
   worktree summary over Wi-Fi.

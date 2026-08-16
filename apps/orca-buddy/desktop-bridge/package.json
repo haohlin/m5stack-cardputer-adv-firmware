@@ -1,6 +1,6 @@
 {
   "name": "@haohan/orca-cardputer-bridge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Local Orca Cardputer Buddy bridge and Codex MCP adapter",
   "type": "module",

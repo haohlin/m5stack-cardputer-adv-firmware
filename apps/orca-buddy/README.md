@@ -1,6 +1,6 @@
 # Orca Cardputer Buddy
 
-Independent Orca Cardputer app contract, version `0.1.2`. Firmware header
+Independent Orca Cardputer app contract, version `0.1.3`. Firmware header
 shows this version on device and release checks keep it equal to bridge/plugin
 metadata.
 

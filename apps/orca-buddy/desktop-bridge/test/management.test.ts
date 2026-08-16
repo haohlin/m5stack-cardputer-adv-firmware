@@ -50,6 +50,19 @@ test("init and provisioning keep generated tokens in mode-0600 files and redact 
   assert.match(provisioned.terminalMessage, /\$HOME\//);
 });
 
+test("explicit replacement rotates pairing material for a changed LAN address", async () => {
+  const home = await temporaryDirectory("orca-replace-home-");
+  const first = await initializeBridge({ home, host: "192.168.31.209", port: 18765 });
+  const before = JSON.parse(await readFile(first.pairingFile, "utf8")) as { endpoint: string; token: string };
+  const replaced = await initializeBridge({ home, host: "172.20.10.6", port: 18765, replace: true });
+  const after = JSON.parse(await readFile(replaced.pairingFile, "utf8")) as { endpoint: string; token: string };
+  assert.equal(after.endpoint, "wss://172.20.10.6:18765/device");
+  assert.notEqual(after.token, before.token);
+  for (const path of replaced.protectedFiles) {
+    assert.equal((await stat(path)).mode & 0o777, 0o600, path);
+  }
+});
+
 test("LaunchAgent lifecycle uses temporary HOME and exact launchctl argv", async () => {
   const home = await temporaryDirectory("orca-launch-home-");
   const tools = await temporaryDirectory("orca-launch-tools-");

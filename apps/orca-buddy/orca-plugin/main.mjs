@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, open } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile } from "node:fs/promises";
 import { homedir, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,8 @@ const DIAGNOSTIC_EVENTS = new Set([
   "pair.failed.usb-none",
   "pair.failed.usb-multiple",
   "pair.failed.sender",
+  "bridge.failed.stale-lan-binding",
+  "bridge.lan-binding-replaced",
 ]);
 
 const DIAGNOSTIC_EVENT_FOR_FAILURE = Object.freeze({
@@ -180,6 +182,7 @@ export function createBridgeRuntime({
   interfaces = networkInterfaces,
   run = runFixed,
   regularFile = isRegularFile,
+  readConfig = readFile,
   progress = () => {},
 } = {}) {
   const paths = bridgePaths(home);
@@ -207,6 +210,15 @@ export function createBridgeRuntime({
     throw new Error("local bridge returned an invalid status");
   }
 
+  async function configuredListenAddress() {
+    try {
+      const value = JSON.parse(await readConfig(paths.config, "utf8"));
+      return typeof value?.listenAddress === "string" ? value.listenAddress : null;
+    } catch {
+      return null;
+    }
+  }
+
   return {
     async enable() {
       await ensureBridgeBuild();
@@ -218,6 +230,13 @@ export function createBridgeRuntime({
       }
       if (state === "failed" && await regularFile(paths.launchAgent)) {
         await runNode(["stop"]);
+        const host = selectUniquePrivateIpv4(interfaces());
+        if (await configuredListenAddress() !== host) {
+          await appendDiagnostic(paths, "bridge.failed.stale-lan-binding");
+          await runNode(["init", "--host", host, "--port", BRIDGE_PORT, "--replace"], 90_000);
+          await appendDiagnostic(paths, "bridge.lan-binding-replaced");
+          progress("bridge: stale LAN binding replaced; USB pairing required");
+        }
       }
       if (await regularFile(paths.launchAgent) && state !== "failed") await runNode(["start"]);
       else await runNode(["install"]);

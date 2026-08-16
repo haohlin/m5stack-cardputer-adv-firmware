@@ -23,6 +23,7 @@ export interface InitializeOptions {
   host?: string;
   port?: number;
   opensslPath?: string;
+  replace?: boolean;
 }
 
 export interface InitializeResult {
@@ -85,7 +86,7 @@ export async function initializeBridge(options: InitializeOptions): Promise<Init
   const paths = bridgePaths(options.home);
   try {
     await lstat(paths.pairingFile);
-    throw new Error("bridge is already initialized");
+    if (!options.replace) throw new Error("bridge is already initialized");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

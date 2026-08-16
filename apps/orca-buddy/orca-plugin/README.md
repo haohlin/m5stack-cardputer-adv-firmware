@@ -51,6 +51,9 @@ exactly one non-loopback private IPv4 address (`10/8`, `172.16/12`, or
 selecting public or ambiguous network address.
 It creates protected local CA/WSS/pairing state in
 `~/.orca-cardputer-bridge` and starts existing per-user LaunchAgent bridge.
+If a later network change leaves old bridge binding failed, explicit **Enable
+Bridge** replaces stale certificate, endpoint, and pairing material for current
+LAN address. Run **Pair Connected Device** once again before Wi-Fi reconnects.
 
 `Pair Connected Device` performs protected USB serial pairing: it creates a
 mode-0600 one-use USB payload and uses existing sender. Sender requires exactly

@@ -3,7 +3,7 @@
 ## v0.1 boundary
 
 `orca-buddy` is an independent app identity: `Orca Cardputer Buddy`, version
-`0.1.2`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
+`0.1.3`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
 independent firmware plus a local macOS bridge and MCP adapter. It does not use
 a Claude compatibility layer, characters, Claude graphics, private Orca hooks,
 terminal-content collection, or any Orca control protocol. The only automatic
@@ -108,6 +108,10 @@ JSON-lines diagnostic file under bridge logs. Each entry contains only timestamp
 plus fixed stage/failure event; errors, serial data, secrets, endpoint, payload,
 CA, and Wi-Fi information are never stored. USB selection distinguishes no
 Cardputer serial device from multiple candidate serial devices.
+If user explicitly enables a failed bridge after LAN address changed, plugin
+replaces stale certificate, endpoint, and pairing credentials for current unique
+private LAN address. It writes fixed no-secret replacement events and requires
+one new USB pairing; old device credentials cannot authenticate new endpoint.
 
 ## Version visibility
 
