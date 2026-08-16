@@ -182,6 +182,47 @@ void testLoadFailsClosed() {
   CHECK(!manager.active().hasPairing);
 }
 
+void testFallbackStorePersistsCombinedConfigWhenPrimaryRejectsLargeUpdate() {
+  MemoryStore primary;
+  MemoryStore fallback;
+  orca::ConfigManager primaryManager(primary);
+  CHECK(primaryManager.updateWifi(validWifi()));
+
+  primary.failWrite = true;
+  orca::FallbackConfigStore store(primary, fallback);
+  orca::ConfigManager manager(store);
+  CHECK(manager.load());
+  CHECK(manager.active().hasWifi);
+  CHECK(!manager.active().hasPairing);
+  CHECK(manager.updatePairing(validPairing()));
+  CHECK(!fallback.bytes.empty());
+
+  orca::FallbackConfigStore reloadedStore(primary, fallback);
+  orca::ConfigManager reloaded(reloadedStore);
+  CHECK(reloaded.load());
+  CHECK(reloaded.active().hasWifi);
+  CHECK(reloaded.active().hasPairing);
+  CHECK(reloaded.active().wifi == validWifi());
+  CHECK(reloaded.active().pairing == validPairing());
+}
+
+void testFallbackForgetDoesNotClaimSuccessWhenFallbackRecordRemains() {
+  MemoryStore primary;
+  MemoryStore fallback;
+  orca::ConfigManager primaryManager(primary);
+  CHECK(primaryManager.updateWifi(validWifi()));
+  primary.failWrite = true;
+
+  orca::FallbackConfigStore store(primary, fallback);
+  orca::ConfigManager manager(store);
+  CHECK(manager.load());
+  CHECK(manager.updatePairing(validPairing()));
+  fallback.failErase = true;
+
+  CHECK(!manager.forget());
+  CHECK(!fallback.bytes.empty());
+}
+
 void testUiModelBoundsAndSanitization() {
   orca::ConsoleModel model;
   orca::ServerEvent snapshot;
@@ -304,6 +345,8 @@ int main() {
   testBlobChecksumAndVersion();
   testFailedUpdatesPreserveActiveConfig();
   testLoadFailsClosed();
+  testFallbackStorePersistsCombinedConfigWhenPrimaryRejectsLargeUpdate();
+  testFallbackForgetDoesNotClaimSuccessWhenFallbackRecordRemains();
   testUiModelBoundsAndSanitization();
   testFrameParserAndNamedMessages();
   testDeviceMessageEncoding();
@@ -312,6 +355,6 @@ int main() {
     std::cerr << failures << " host test(s) failed\n";
     return EXIT_FAILURE;
   }
-  std::cout << "PASS: 9 Orca Buddy host behavior groups\n";
+  std::cout << "PASS: 11 Orca Buddy host behavior groups\n";
   return EXIT_SUCCESS;
 }

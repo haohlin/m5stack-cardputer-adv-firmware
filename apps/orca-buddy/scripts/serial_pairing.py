@@ -10,6 +10,10 @@ from pathlib import Path
 
 MAX_PAYLOAD_BYTES = 12_288
 SUCCESS = "OK secure pairing saved"
+USB_CDC_SETTLE_SECONDS = 0.5
+USB_CDC_RESYNC_SECONDS = 0.2
+USB_CDC_FRAME_BYTES = 16
+USB_CDC_FRAME_DELAY_SECONDS = 0.04
 
 
 def read_provisioning_payload(path: Path) -> bytes:
@@ -40,9 +44,20 @@ def send_pairing(port: str, payload: bytes, timeout_seconds: float = 8.0) -> Non
 
     serial_port = serial.Serial(port, 115200, timeout=0.2, write_timeout=1)
     try:
+        # ESP32-S3 USB CDC may drop a burst immediately after opening. A newline
+        # also clears any incomplete command left by a prior interrupted attempt.
+        time.sleep(USB_CDC_SETTLE_SECONDS)
         serial_port.reset_input_buffer()
-        serial_port.write(payload)
+        serial_port.write(b"\n")
         serial_port.flush()
+        time.sleep(USB_CDC_RESYNC_SECONDS)
+        serial_port.reset_input_buffer()
+        for offset in range(0, len(payload), USB_CDC_FRAME_BYTES):
+            frame = payload[offset:offset + USB_CDC_FRAME_BYTES]
+            if serial_port.write(frame) != len(frame):
+                raise RuntimeError("USB serial write was incomplete")
+            serial_port.flush()
+            time.sleep(USB_CDC_FRAME_DELAY_SECONDS)
         deadline = time.monotonic() + timeout_seconds
         buffered = b""
         while time.monotonic() < deadline:

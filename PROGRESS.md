@@ -76,6 +76,13 @@
 - Orca Buddy host core, desktop bridge, root contract, and plugin package checks
   pass. Firmware/package staging and physical Launcher/device proof remain
   separate pending operator action.
+- Orca Buddy USB pairing repair: live device evidence showed USB CDC accepts
+  256-byte bursts but drops 512-byte bursts, and its shared Launcher NVS
+  rejected the 1,270-byte combined Wi-Fi/pairing record. Sender now resyncs and
+  paces frames; firmware falls back to non-formatting app SPIFFS while retaining
+  old NVS state. Host core (10 groups), serial sender (4), plugin (10), and
+  Launcher build (1,072,861 bytes) pass. This artifact is not yet physically
+  installed or paired after the repair.
 
 ## Pending hardware proof
 
@@ -83,6 +90,9 @@
 - Install Claude Buddy v1.4.0 through Launcher on physical Cardputer ADV.
 - RFID2: boot/version/status, RFID2 I2C detection, read-only card scan.
 - Claude Buddy: boot, USB serial, BLE advertising/pairing, permission prompt.
+- Orca Buddy: install current artifact through Launcher, pair through Orca
+  Command Palette over USB, then confirm WSS connected state and public Orca
+  worktree summary over Wi-Fi.
 
 ## External security residuals
 

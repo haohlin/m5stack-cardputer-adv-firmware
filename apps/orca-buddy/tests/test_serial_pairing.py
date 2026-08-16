@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -51,6 +52,53 @@ class ProvisioningPayloadTests(unittest.TestCase):
             overlong = self.write_payload(directory, b"orca-pair " + b"x" * 12288 + b"\n")
             with self.assertRaisesRegex(ValueError, "too large"):
                 serial_pairing.read_provisioning_payload(overlong)
+
+
+class PairingTransportTests(unittest.TestCase):
+    def test_sends_resynchronized_paced_frames_before_waiting_for_device_ack(self):
+        class FakeSerialPort:
+            def __init__(self):
+                self.writes = []
+                self.closed = False
+
+            def reset_input_buffer(self):
+                return None
+
+            def write(self, payload):
+                self.writes.append(bytes(payload))
+                return len(payload)
+
+            def flush(self):
+                return None
+
+            def read(self, _maximum):
+                return b"OK secure pairing saved\n"
+
+            def close(self):
+                self.closed = True
+
+        class FakeSerialModule:
+            def __init__(self, port):
+                self.port = port
+
+            def Serial(self, path, baudrate, timeout, write_timeout):
+                self.path = path
+                self.baudrate = baudrate
+                self.timeout = timeout
+                self.write_timeout = write_timeout
+                return self.port
+
+        port = FakeSerialPort()
+        module = FakeSerialModule(port)
+        payload = b"orca-pair " + b"x" * 1329 + b"\n"
+
+        with patch.dict(sys.modules, {"serial": module}), patch.object(serial_pairing.time, "sleep"):
+            serial_pairing.send_pairing("/dev/cu.usbmodem-test", payload)
+
+        self.assertEqual(port.writes[0], b"\n")
+        self.assertEqual(b"".join(port.writes[1:]), payload)
+        self.assertTrue(all(len(frame) <= 16 for frame in port.writes[1:]))
+        self.assertTrue(port.closed)
 
 
 if __name__ == "__main__":

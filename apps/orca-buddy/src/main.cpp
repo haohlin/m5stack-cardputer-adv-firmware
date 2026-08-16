@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <M5Cardputer.h>
 #include <Preferences.h>
+#include <SPIFFS.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
 
@@ -22,6 +23,9 @@ namespace {
 constexpr std::uint32_t kWifiConnectTimeoutMs = 15000;
 constexpr std::size_t kMaximumSerialCommandBytes = 12288;
 constexpr std::size_t kVisibleRows = 4;
+constexpr const char* kFallbackConfigPath = "/orca-buddy-config.bin";
+constexpr const char* kFallbackStagingPath = "/orca-buddy-config.next";
+constexpr const char* kFallbackPreviousPath = "/orca-buddy-config.prev";
 
 class PreferencesConfigStore final : public orca::ConfigStore {
  public:
@@ -56,9 +60,77 @@ class PreferencesConfigStore final : public orca::ConfigStore {
   bool erase() override {
     Preferences preferences;
     if (!preferences.begin("orca-buddy", false)) return false;
-    const bool removed = preferences.remove("config");
+    const bool removed = !preferences.isKey("config") || preferences.remove("config");
     preferences.end();
     return removed;
+  }
+};
+
+class SpiffsConfigStore final : public orca::ConfigStore {
+ public:
+  bool read(std::vector<std::uint8_t>& output) override {
+    if (!SPIFFS.begin(false)) return false;
+    if (readPath(kFallbackConfigPath, output)) return true;
+    return readPath(kFallbackPreviousPath, output);
+  }
+
+  bool write(const std::vector<std::uint8_t>& input) override {
+    if (input.empty() || input.size() > kMaximumSerialCommandBytes || !SPIFFS.begin(false)) {
+      return false;
+    }
+    SPIFFS.remove(kFallbackStagingPath);
+    File staging = SPIFFS.open(kFallbackStagingPath, FILE_WRITE);
+    if (!staging) return false;
+    const std::size_t written = staging.write(input.data(), input.size());
+    staging.flush();
+    staging.close();
+    if (written != input.size()) {
+      SPIFFS.remove(kFallbackStagingPath);
+      return false;
+    }
+
+    const bool hasCurrent = SPIFFS.exists(kFallbackConfigPath);
+    if (hasCurrent) {
+      SPIFFS.remove(kFallbackPreviousPath);
+      if (!SPIFFS.rename(kFallbackConfigPath, kFallbackPreviousPath)) {
+        SPIFFS.remove(kFallbackStagingPath);
+        return false;
+      }
+    }
+    if (!SPIFFS.rename(kFallbackStagingPath, kFallbackConfigPath)) {
+      if (hasCurrent) SPIFFS.rename(kFallbackPreviousPath, kFallbackConfigPath);
+      return false;
+    }
+    SPIFFS.remove(kFallbackPreviousPath);
+    return true;
+  }
+
+  bool erase() override {
+    if (!SPIFFS.begin(false)) return false;
+    bool removed = true;
+    for (const char* path : {kFallbackConfigPath, kFallbackStagingPath, kFallbackPreviousPath}) {
+      if (SPIFFS.exists(path) && !SPIFFS.remove(path)) removed = false;
+    }
+    return removed;
+  }
+
+ private:
+  static bool readPath(const char* path, std::vector<std::uint8_t>& output) {
+    File file = SPIFFS.open(path, FILE_READ);
+    if (!file) return false;
+    const std::size_t length = file.size();
+    if (length == 0 || length > kMaximumSerialCommandBytes) {
+      file.close();
+      return false;
+    }
+    output.resize(length);
+    const std::size_t read = file.readBytes(reinterpret_cast<char*>(output.data()), length);
+    file.close();
+    if (read != length) {
+      output.clear();
+      return false;
+    }
+    return true;
   }
 };
 
@@ -79,7 +151,9 @@ enum class UiMode {
 
 enum class WifiAttempt { None, Stored, Candidate };
 
-PreferencesConfigStore configStore;
+PreferencesConfigStore preferencesConfigStore;
+SpiffsConfigStore spiffsConfigStore;
+orca::FallbackConfigStore configStore(preferencesConfigStore, spiffsConfigStore);
 orca::ConfigManager configManager(configStore);
 orca::ConsoleModel consoleModel;
 orca::ReconnectBackoff reconnectBackoff;
@@ -492,6 +566,9 @@ void handleSerialCommand(const std::string& command) {
       return;
     }
     stopWebSocket();
+    if (configStore.usingFallback()) {
+      Serial.println("INFO pairing configuration saved in local fallback storage");
+    }
     Serial.println("OK secure pairing saved");
     setStatus("PAIR", "Secure pairing saved");
     startWebSocket();

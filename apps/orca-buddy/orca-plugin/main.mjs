@@ -14,6 +14,14 @@ const BRIDGE_WS_MODULE = join(BRIDGE_ROOT, "node_modules", "ws", "index.js");
 const PAIRING_SENDER = resolve(PLUGIN_ROOT, "..", "scripts", "write_pairing_serial.sh");
 const BRIDGE_PORT = "17654";
 
+const FAILURE_MESSAGES = Object.freeze({
+  "pair-storage": "device rejected pairing because its saved configuration could not be updated",
+  "pair-no-ack": "device did not acknowledge USB pairing within 8 seconds",
+  "pair-rejected": "device rejected USB pairing",
+  "pair-usb": "Cardputer USB serial connection is unavailable",
+  "pair-sender": "local USB pairing sender failed",
+});
+
 export const COMMANDS = Object.freeze({
   enable: "enable-bridge",
   pair: "pair-connected-device",
@@ -82,6 +90,32 @@ async function runFixed(executable, args, options) {
   }
 }
 
+function cardputerFailure(code) {
+  const error = new Error(FAILURE_MESSAGES[code] ?? "local bridge command failed");
+  error.cardputerFailure = code;
+  return error;
+}
+
+function classifyPairingSenderFailure(error) {
+  const output = `${error?.stderr ?? ""}\n${error?.message ?? ""}`;
+  if (output.includes("ERR pairing persist failed; active config unchanged")) {
+    return cardputerFailure("pair-storage");
+  }
+  if (output.includes("device did not acknowledge pairing within 8 seconds")) {
+    return cardputerFailure("pair-no-ack");
+  }
+  if (output.includes("device rejected pairing:")) return cardputerFailure("pair-rejected");
+  if (output.includes("no unique Cardputer USB serial port detected") ||
+      output.includes("could not open port") || output.includes("Device not configured")) {
+    return cardputerFailure("pair-usb");
+  }
+  return cardputerFailure("pair-sender");
+}
+
+function safeFailureMessage(error) {
+  return FAILURE_MESSAGES[error?.cardputerFailure] ?? "local bridge command failed";
+}
+
 export function createBridgeRuntime({
   pluginRoot = PLUGIN_ROOT,
   bridgeRoot = BRIDGE_ROOT,
@@ -93,6 +127,7 @@ export function createBridgeRuntime({
   interfaces = networkInterfaces,
   run = runFixed,
   regularFile = isRegularFile,
+  progress = () => {},
 } = {}) {
   const paths = bridgePaths(home);
   const runNode = (args, timeout = 30_000) => run(nodePath, [bridgeCli, ...args], {
@@ -140,13 +175,20 @@ export function createBridgeRuntime({
       if (!(await regularFile(paths.config))) throw new Error("bridge is not configured");
       const output = join(paths.exportDirectory, `orca-pair-${Date.now()}-${randomUUID()}.txt`);
       await runNode(["provision", output]);
+      progress("pair: protected payload created");
       const serialEnvironment = { ...process.env };
       delete serialEnvironment.CARDPUTER_ADV_PORT;
-      await run("/bin/bash", [pairingSender, output], {
-        cwd: pluginRoot,
-        env: serialEnvironment,
-        timeout: 20_000,
-      });
+      progress("pair: sending protected USB payload");
+      try {
+        await run("/bin/bash", [pairingSender, output], {
+          cwd: pluginRoot,
+          env: serialEnvironment,
+          timeout: 20_000,
+        });
+      } catch (error) {
+        throw classifyPairingSenderFailure(error);
+      }
+      progress("pair: device acknowledged pairing");
     },
 
     async status() {
@@ -163,9 +205,10 @@ export function createBridgeRuntime({
 }
 
 export function createPluginController({ runtime, notify, log }) {
-  const reportFailure = async (action) => {
-    log(`Orca Cardputer ${action} failed`);
-    await notify(`${action} failed. Check plugin README; no pairing secret was shown.`);
+  const reportFailure = async (action, error) => {
+    const reason = safeFailureMessage(error);
+    log(`Orca Cardputer ${action} failed: ${reason}`);
+    await notify(`${action} failed: ${reason}. Check plugin README; no pairing secret was shown.`);
     return { ok: false };
   };
 
@@ -175,16 +218,16 @@ export function createPluginController({ runtime, notify, log }) {
         try {
           await runtime.enable();
           await notify("Bridge enabled. Pair device once over USB, then check Cardputer display.");
-        } catch {
-          return reportFailure("bridge enable");
+        } catch (error) {
+          return reportFailure("bridge enable", error);
         }
       });
       commands.register(COMMANDS.pair, async () => {
         try {
           await runtime.pair();
           await notify("USB pairing saved. Disconnect USB; Cardputer reconnects over Wi-Fi.");
-        } catch {
-          return reportFailure("device pairing");
+        } catch (error) {
+          return reportFailure("device pairing", error);
         }
       });
       commands.register(COMMANDS.status, async () => {
@@ -192,8 +235,8 @@ export function createPluginController({ runtime, notify, log }) {
           const state = await runtime.status();
           await notify(`Bridge status: ${state}. Device display is live connection status.`);
           return state;
-        } catch {
-          return reportFailure("bridge status");
+        } catch (error) {
+          return reportFailure("bridge status", error);
         }
       });
       commands.register(COMMANDS.disable, async () => {
@@ -201,8 +244,8 @@ export function createPluginController({ runtime, notify, log }) {
           const state = await runtime.disable();
           await notify(`Bridge status: ${state}. Pairing state is retained.`);
           return state;
-        } catch {
-          return reportFailure("bridge disable");
+        } catch (error) {
+          return reportFailure("bridge disable", error);
         }
       });
     },
@@ -211,7 +254,7 @@ export function createPluginController({ runtime, notify, log }) {
 
 export default function activate(api) {
   const controller = createPluginController({
-    runtime: createBridgeRuntime(),
+    runtime: createBridgeRuntime({ progress: (message) => api.log(`Orca Cardputer ${message}`) }),
     notify: (body) => api.host.call("notifications.show", {
       title: "Orca Cardputer Buddy",
       body,

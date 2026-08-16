@@ -278,6 +278,38 @@ bool decodeConfigBlob(const std::vector<std::uint8_t>& input,
   return true;
 }
 
+FallbackConfigStore::FallbackConfigStore(ConfigStore& primary, ConfigStore& fallback)
+    : primary_(primary), fallback_(fallback) {}
+
+bool FallbackConfigStore::read(std::vector<std::uint8_t>& output) {
+  std::vector<std::uint8_t> candidate;
+  DeviceConfig decoded;
+  if (fallback_.read(candidate) && decodeConfigBlob(candidate, decoded)) {
+    output = std::move(candidate);
+    usingFallback_ = true;
+    return true;
+  }
+  usingFallback_ = false;
+  return primary_.read(output);
+}
+
+bool FallbackConfigStore::write(const std::vector<std::uint8_t>& input) {
+  if (usingFallback_) return fallback_.write(input);
+  if (primary_.write(input)) return true;
+  if (!fallback_.write(input)) return false;
+  usingFallback_ = true;
+  return true;
+}
+
+bool FallbackConfigStore::erase() {
+  const bool primaryErased = primary_.erase();
+  const bool fallbackErased = fallback_.erase();
+  usingFallback_ = false;
+  return primaryErased && fallbackErased;
+}
+
+bool FallbackConfigStore::usingFallback() const { return usingFallback_; }
+
 ConfigManager::ConfigManager(ConfigStore& store) : store_(store) {}
 
 bool ConfigManager::load() {

@@ -53,6 +53,21 @@ class ConfigStore {
   virtual bool erase() = 0;
 };
 
+class FallbackConfigStore final : public ConfigStore {
+ public:
+  FallbackConfigStore(ConfigStore& primary, ConfigStore& fallback);
+
+  bool read(std::vector<std::uint8_t>& output) override;
+  bool write(const std::vector<std::uint8_t>& input) override;
+  bool erase() override;
+  bool usingFallback() const;
+
+ private:
+  ConfigStore& primary_;
+  ConfigStore& fallback_;
+  bool usingFallback_ = false;
+};
+
 class ConfigManager {
  public:
   explicit ConfigManager(ConfigStore& store);

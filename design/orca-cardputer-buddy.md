@@ -26,8 +26,10 @@ then installs it to `ota_0`. Product behavior retains this path.
 USB serial pairing is the one-time local bootstrap transport. The desktop
 bridge writes one mode-0600 `orca-pair` file; the checked sender transfers that
 single line and the firmware replaces pairing only after full validation and
-atomic persistence. It does not carry normal network sessions. Wi-Fi is runtime
-transport only after explicit local pairing material exists.
+atomic persistence. Sender settles USB CDC, resynchronizes an interrupted
+previous line, then uses paced bounded writes; Cardputer ADV drops larger burst
+writes during live USB operation. It does not carry normal network sessions.
+Wi-Fi is runtime transport only after explicit local pairing material exists.
 
 Wi-Fi transport uses WSS only. Device validates its configured CA and fixed
 `/device` endpoint, authenticates with its dedicated Authorization bearer,
@@ -37,6 +39,17 @@ query-token pairing, unauthenticated peers, certificate bypass, and implicit
 Wi-Fi pairing are outside contract. Wi-Fi SSID/passphrase are selected and
 entered on Cardputer, then stored with the complete versioned/checksummed
 configuration blob.
+
+Launcher preserves one shared NVS partition across apps. Normal Orca Buddy
+configuration writes use its `orca-buddy` NVS record. If that record rejects a
+larger combined Wi-Fi/pairing update, firmware keeps the old NVS record intact
+and stores the complete checksummed replacement in app SPIFFS. It never formats
+SPIFFS automatically. At boot a valid SPIFFS fallback takes precedence; an
+invalid or incomplete fallback is ignored and NVS remains source. Replacement
+uses staged/current/previous files so a failed fallback update retains a valid
+record. Explicit on-device **Forget** clears both stores. This is a reliability
+fallback for Launcher-shared storage, not a new network, desktop, or export
+surface; bearer, CA, and Wi-Fi credentials remain hidden from display/logs.
 
 ## MCP lifecycle
 
@@ -76,6 +89,11 @@ command first requires configured bridge, creates unique protected payload, and
 invokes existing sender only after user selected explicit command. It clears
 `CARDPUTER_ADV_PORT` so sender detects exactly one attached Cardputer port.
 Plugin removal retains bridge/pairing state; disable only stops LaunchAgent.
+Plugin logs only fixed pairing lifecycle phases and fixed safe failure classes:
+payload created, USB transfer begun, device acknowledgement, unavailable USB,
+missing acknowledgement, device rejection, or saved-config failure. It never
+logs subprocess output, payload content, bearer, CA, Wi-Fi credentials, or
+serial input.
 
 ## Backlog controls
 

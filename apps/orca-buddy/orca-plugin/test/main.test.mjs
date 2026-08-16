@@ -127,6 +127,94 @@ test("controller reports a safe failure without causing Orca command failure", a
   assert.doesNotMatch(notices[0], /bearer|private/i);
 });
 
+test("controller reports a specific secret-free device storage failure", async () => {
+  const notices = [];
+  const logs = [];
+  const registered = new Map();
+  const failure = new Error("private bearer must never appear");
+  failure.cardputerFailure = "pair-storage";
+  const controller = createPluginController({
+    runtime: {
+      enable: async () => {},
+      pair: async () => { throw failure; },
+      status: async () => "stopped",
+      disable: async () => "stopped",
+    },
+    notify: async (body) => notices.push(body),
+    log: (message) => logs.push(message),
+  });
+
+  controller.register({ register: (id, handler) => registered.set(id, handler) });
+  await assert.doesNotReject(registered.get(COMMANDS.pair)());
+
+  assert.match(notices[0], /saved configuration could not be updated/i);
+  assert.match(logs[0], /saved configuration could not be updated/i);
+  assert.doesNotMatch(`${notices.join(" ")} ${logs.join(" ")}`, /bearer|private/i);
+});
+
+test("pair maps sender storage rejection to a safe failure code", async () => {
+  const bridgeRoot = "/repo/apps/orca-buddy/desktop-bridge";
+  const bridgeCli = `${bridgeRoot}/dist/bin/orca-cardputer.js`;
+  const bridgeWsModule = `${bridgeRoot}/node_modules/ws/index.js`;
+  const home = "/home/tester";
+  const config = `${home}/.orca-cardputer-bridge/config.json`;
+  const senderFailure = Object.assign(new Error("private bearer must never appear"), {
+    stderr: "pairing: device rejected pairing: ERR pairing persist failed; active config unchanged",
+  });
+  const runtime = createBridgeRuntime({
+    pluginRoot: "/repo/apps/orca-buddy/orca-plugin",
+    bridgeRoot,
+    bridgeCli,
+    bridgeWsModule,
+    pairingSender: "/repo/apps/orca-buddy/scripts/write_pairing_serial.sh",
+    home,
+    regularFile: async (path) => path === bridgeCli || path === bridgeWsModule || path === config,
+    run: async (executable, args) => {
+      if (executable === "node" && args[1] === "provision") return { stdout: "", stderr: "" };
+      if (executable === "/bin/bash") throw senderFailure;
+      throw new Error("unexpected command");
+    },
+  });
+
+  await assert.rejects(
+    () => runtime.pair(),
+    (error) => error?.cardputerFailure === "pair-storage" && !/bearer|private/i.test(error.message),
+  );
+});
+
+test("pair emits secret-free progress at each host-device boundary", async () => {
+  const bridgeRoot = "/repo/apps/orca-buddy/desktop-bridge";
+  const bridgeCli = `${bridgeRoot}/dist/bin/orca-cardputer.js`;
+  const bridgeWsModule = `${bridgeRoot}/node_modules/ws/index.js`;
+  const home = "/home/tester";
+  const config = `${home}/.orca-cardputer-bridge/config.json`;
+  const progress = [];
+  const runtime = createBridgeRuntime({
+    pluginRoot: "/repo/apps/orca-buddy/orca-plugin",
+    bridgeRoot,
+    bridgeCli,
+    bridgeWsModule,
+    pairingSender: "/repo/apps/orca-buddy/scripts/write_pairing_serial.sh",
+    home,
+    progress: (message) => progress.push(message),
+    regularFile: async (path) => path === bridgeCli || path === bridgeWsModule || path === config,
+    run: async (executable, args) => {
+      if (executable === "node" && args[1] === "provision") return { stdout: "", stderr: "" };
+      if (executable === "/bin/bash") return { stdout: "Pairing saved by device.\n", stderr: "" };
+      throw new Error("unexpected command");
+    },
+  });
+
+  await runtime.pair();
+
+  assert.deepEqual(progress, [
+    "pair: protected payload created",
+    "pair: sending protected USB payload",
+    "pair: device acknowledged pairing",
+  ]);
+  assert.doesNotMatch(progress.join(" "), /bearer|token|certificate|private/i);
+});
+
 test("activate registers same fixed command set with Orca host", () => {
   const registered = new Map();
   activate({
