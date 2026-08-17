@@ -3,7 +3,7 @@
   "id": "orca-cardputer",
   "publisher": "haohlin",
   "name": "Orca Cardputer Buddy",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Guided setup for a reviewed local bridge sidecar that streams public Orca status to a paired Cardputer only after explicit Orca commands.",
   "repository": "https://github.com/haohlin/m5stack-cardputer-adv-firmware",
   "engines": {

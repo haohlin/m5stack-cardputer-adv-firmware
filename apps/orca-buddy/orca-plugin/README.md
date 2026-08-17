@@ -60,13 +60,14 @@ mode-0600 one-use USB payload and uses existing sender. Sender requires exactly
 one detected Cardputer serial port; it never accepts `CARDPUTER_ADV_PORT`
 environment override from Orca and never displays bearer or CA content. Fix
 cable/port ambiguity, then rerun same command. Pairing succeeds only after
-device returns `OK secure pairing saved`. It resynchronizes interrupted serial
-input and sends paced USB CDC frames, so reruns do not reuse a partial command.
-Plugin logs only safe stages and fixed failure reasons; it never logs pairing
-material or raw subprocess output. A saved-config failure means device retained
-its previous configuration; current firmware automatically falls back from
-shared Launcher NVS to its app SPIFFS record without formatting or erasing
-Wi-Fi settings.
+device returns `OK secure pairing saved`. It waits through a short macOS USB
+CDC re-enumeration, resynchronizes interrupted serial input, and sends paced
+frames, so reruns do not reuse a partial command. Plugin logs only safe stages
+and fixed failure reasons; it never logs pairing material or raw subprocess
+output. Firmware `0.1.5` stores Wi-Fi separately from bridge pairing, so a
+pairing-store failure cannot prevent Wi-Fi save. If its independent erase
+fails, the device truthfully reports that Wi-Fi was forgotten while pairing
+remains, rather than claiming the old Wi-Fi config is still active.
 
 Pairing requires a Cardputer USB serial device; being on Wi-Fi is not enough
 until pairing has succeeded once. A missing serial port now reports that exact

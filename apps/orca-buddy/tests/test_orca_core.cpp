@@ -146,60 +146,85 @@ void testBlobChecksumAndVersion() {
 }
 
 void testFailedUpdatesPreserveActiveConfig() {
-  MemoryStore store;
-  orca::ConfigManager manager(store);
+  MemoryStore wifi;
+  MemoryStore pairing;
+  orca::ConfigManager manager(wifi, pairing);
   CHECK(manager.updateWifi(validWifi()));
   CHECK(manager.updatePairing(validPairing()));
   const auto active = manager.active();
-  const auto persisted = store.bytes;
+  const auto persistedWifi = wifi.bytes;
+  const auto persistedPairing = pairing.bytes;
 
-  store.failWrite = true;
+  wifi.failWrite = true;
   CHECK(!manager.updateWifi({"Replacement", "replacement passphrase"}));
   CHECK(manager.active() == active);
-  CHECK(store.bytes == persisted);
+  CHECK(wifi.bytes == persistedWifi);
+  pairing.failWrite = true;
   CHECK(!manager.updatePairing({"wss://other.local/device",
                                 std::string(43, 'Z'), testCa()}));
   CHECK(manager.active() == active);
+  CHECK(pairing.bytes == persistedPairing);
 
-  store.failWrite = false;
-  store.failErase = true;
+  wifi.failErase = true;
   CHECK(!manager.forget());
   CHECK(manager.active() == active);
-  CHECK(store.bytes == persisted);
+  CHECK(wifi.bytes == persistedWifi);
+  CHECK(pairing.bytes == persistedPairing);
 
-  store.failErase = false;
+  wifi.failErase = false;
+  pairing.failErase = false;
   CHECK(manager.forget());
   CHECK(!manager.active().hasWifi);
   CHECK(!manager.active().hasPairing);
-  CHECK(store.bytes.empty());
+  CHECK(wifi.bytes.empty());
+  CHECK(pairing.bytes.empty());
+}
+
+void testWifiPersistenceDoesNotDependOnPairingStorage() {
+  MemoryStore wifi;
+  MemoryStore pairing;
+  orca::ConfigManager manager(wifi, pairing);
+
+  CHECK(manager.updatePairing(validPairing()));
+  const auto savedPairing = pairing.bytes;
+  pairing.failWrite = true;
+
+  CHECK(manager.updateWifi(validWifi()));
+  CHECK(pairing.bytes == savedPairing);
+  CHECK(manager.active().hasWifi);
+  CHECK(manager.active().hasPairing);
+  CHECK(manager.active().wifi == validWifi());
+  CHECK(manager.active().pairing == validPairing());
+
+  orca::DeviceConfig savedWifi;
+  CHECK(orca::decodeConfigBlob(wifi.bytes, savedWifi));
+  CHECK(savedWifi.hasWifi);
+  CHECK(!savedWifi.hasPairing);
 }
 
 void testLoadFailsClosed() {
-  MemoryStore store;
-  store.bytes = {0, 1, 2, 3};
-  orca::ConfigManager manager(store);
+  MemoryStore wifi;
+  MemoryStore pairing;
+  wifi.bytes = {0, 1, 2, 3};
+  orca::ConfigManager manager(wifi, pairing);
   CHECK(!manager.load());
   CHECK(!manager.active().hasWifi);
   CHECK(!manager.active().hasPairing);
 }
 
-void testFallbackStorePersistsCombinedConfigWhenPrimaryRejectsLargeUpdate() {
+void testFallbackStorePersistsPairingWhenPrimaryRejectsLargeUpdate() {
+  MemoryStore wifi;
   MemoryStore primary;
   MemoryStore fallback;
-  orca::ConfigManager primaryManager(primary);
-  CHECK(primaryManager.updateWifi(validWifi()));
-
   primary.failWrite = true;
   orca::FallbackConfigStore store(primary, fallback);
-  orca::ConfigManager manager(store);
-  CHECK(manager.load());
-  CHECK(manager.active().hasWifi);
-  CHECK(!manager.active().hasPairing);
+  orca::ConfigManager manager(wifi, store);
+  CHECK(manager.updateWifi(validWifi()));
   CHECK(manager.updatePairing(validPairing()));
   CHECK(!fallback.bytes.empty());
 
   orca::FallbackConfigStore reloadedStore(primary, fallback);
-  orca::ConfigManager reloaded(reloadedStore);
+  orca::ConfigManager reloaded(wifi, reloadedStore);
   CHECK(reloaded.load());
   CHECK(reloaded.active().hasWifi);
   CHECK(reloaded.active().hasPairing);
@@ -208,35 +233,37 @@ void testFallbackStorePersistsCombinedConfigWhenPrimaryRejectsLargeUpdate() {
 }
 
 void testFallbackForgetDoesNotClaimSuccessWhenFallbackRecordRemains() {
+  MemoryStore wifi;
   MemoryStore primary;
   MemoryStore fallback;
-  orca::ConfigManager primaryManager(primary);
-  CHECK(primaryManager.updateWifi(validWifi()));
   primary.failWrite = true;
 
   orca::FallbackConfigStore store(primary, fallback);
-  orca::ConfigManager manager(store);
-  CHECK(manager.load());
+  orca::ConfigManager manager(wifi, store);
+  CHECK(manager.updateWifi(validWifi()));
   CHECK(manager.updatePairing(validPairing()));
   fallback.failErase = true;
 
   CHECK(!manager.forget());
   CHECK(!fallback.bytes.empty());
+  CHECK(!manager.active().hasWifi);
+  CHECK(manager.active().hasPairing);
+  CHECK(wifi.bytes.empty());
 }
 
 void testPrimaryConfigCanForgetWhenUnusedFallbackIsUnavailable() {
+  MemoryStore wifi;
   MemoryStore primary;
   MemoryStore fallback;
-  orca::ConfigManager initial(primary);
-  CHECK(initial.updateWifi(validWifi()));
-
   fallback.failErase = true;
   orca::FallbackConfigStore store(primary, fallback);
-  orca::ConfigManager manager(store);
-  CHECK(manager.load());
+  orca::ConfigManager manager(wifi, store);
+  CHECK(manager.updateWifi(validWifi()));
+  CHECK(manager.updatePairing(validPairing()));
   CHECK(manager.forget());
   CHECK(!manager.active().hasWifi);
   CHECK(!manager.active().hasPairing);
+  CHECK(wifi.bytes.empty());
   CHECK(primary.bytes.empty());
 }
 
@@ -382,8 +409,9 @@ int main() {
   testEndpointContract();
   testBlobChecksumAndVersion();
   testFailedUpdatesPreserveActiveConfig();
+  testWifiPersistenceDoesNotDependOnPairingStorage();
   testLoadFailsClosed();
-  testFallbackStorePersistsCombinedConfigWhenPrimaryRejectsLargeUpdate();
+  testFallbackStorePersistsPairingWhenPrimaryRejectsLargeUpdate();
   testFallbackForgetDoesNotClaimSuccessWhenFallbackRecordRemains();
   testPrimaryConfigCanForgetWhenUnusedFallbackIsUnavailable();
   testFallbackMountPlanFormatsOnlyVerifiedBlankPartition();

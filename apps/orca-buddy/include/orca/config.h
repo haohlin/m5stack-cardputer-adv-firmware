@@ -70,7 +70,7 @@ class FallbackConfigStore final : public ConfigStore {
 
 class ConfigManager {
  public:
-  explicit ConfigManager(ConfigStore& store);
+  ConfigManager(ConfigStore& wifiStore, ConfigStore& pairingStore);
 
   bool load();
   bool updateWifi(const WifiConfig& wifi);
@@ -79,9 +79,11 @@ class ConfigManager {
   const DeviceConfig& active() const;
 
  private:
-  bool persist(const DeviceConfig& candidate);
+  bool persistWifi(const WifiConfig& wifi);
+  bool persistPairing(const PairingConfig& pairing);
 
-  ConfigStore& store_;
+  ConfigStore& wifiStore_;
+  ConfigStore& pairingStore_;
   DeviceConfig active_;
 };
 

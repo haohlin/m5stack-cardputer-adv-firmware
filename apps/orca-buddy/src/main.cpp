@@ -61,16 +61,18 @@ bool mountFallbackStorage() {
 
 class PreferencesConfigStore final : public orca::ConfigStore {
  public:
+  explicit PreferencesConfigStore(const char* key) : key_(key) {}
+
   bool read(std::vector<std::uint8_t>& output) override {
     Preferences preferences;
     if (!preferences.begin("orca-buddy", true)) return false;
-    const std::size_t length = preferences.getBytesLength("config");
+    const std::size_t length = preferences.getBytesLength(key_);
     if (length == 0 || length > 12288) {
       preferences.end();
       return false;
     }
     output.resize(length);
-    const std::size_t read = preferences.getBytes("config", output.data(), length);
+    const std::size_t read = preferences.getBytes(key_, output.data(), length);
     preferences.end();
     if (read != length) {
       output.clear();
@@ -83,8 +85,7 @@ class PreferencesConfigStore final : public orca::ConfigStore {
     if (input.empty() || input.size() > 12288) return false;
     Preferences preferences;
     if (!preferences.begin("orca-buddy", false)) return false;
-    const std::size_t written =
-        preferences.putBytes("config", input.data(), input.size());
+    const std::size_t written = preferences.putBytes(key_, input.data(), input.size());
     preferences.end();
     return written == input.size();
   }
@@ -92,10 +93,13 @@ class PreferencesConfigStore final : public orca::ConfigStore {
   bool erase() override {
     Preferences preferences;
     if (!preferences.begin("orca-buddy", false)) return false;
-    const bool removed = !preferences.isKey("config") || preferences.remove("config");
+    const bool removed = !preferences.isKey(key_) || preferences.remove(key_);
     preferences.end();
     return removed;
   }
+
+ private:
+  const char* key_;
 };
 
 class SpiffsConfigStore final : public orca::ConfigStore {
@@ -183,10 +187,11 @@ enum class UiMode {
 
 enum class WifiAttempt { None, Stored, Candidate };
 
-PreferencesConfigStore preferencesConfigStore;
+PreferencesConfigStore wifiConfigStore("wifi");
+PreferencesConfigStore pairingPreferencesStore("pair");
 SpiffsConfigStore spiffsConfigStore;
-orca::FallbackConfigStore configStore(preferencesConfigStore, spiffsConfigStore);
-orca::ConfigManager configManager(configStore);
+orca::FallbackConfigStore pairingConfigStore(pairingPreferencesStore, spiffsConfigStore);
+orca::ConfigManager configManager(wifiConfigStore, pairingConfigStore);
 orca::ConsoleModel consoleModel;
 orca::ReconnectBackoff reconnectBackoff;
 orca::StoredWifiRetryPolicy storedWifiRetry;
@@ -632,7 +637,10 @@ void drawScreen() {
 void performForget() {
   if (!configManager.forget()) {
     uiMode = UiMode::Console;
-    setStatus("ERROR", "Forget failed; config remains active");
+    const auto& active = configManager.active();
+    setStatus("ERROR", !active.hasWifi && active.hasPairing
+                           ? "Wi-Fi forgotten; pairing remains"
+                           : "Forget failed; config remains active");
     return;
   }
   stopWebSocket();
@@ -655,7 +663,7 @@ void handleSerialCommand(const std::string& command) {
       return;
     }
     stopWebSocket();
-    if (configStore.usingFallback()) {
+    if (pairingConfigStore.usingFallback()) {
       Serial.println("INFO pairing configuration saved in local fallback storage");
     }
     Serial.println("OK secure pairing saved");

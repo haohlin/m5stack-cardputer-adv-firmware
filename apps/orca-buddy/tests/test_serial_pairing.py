@@ -11,6 +11,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 import serial_pairing
+import serial_port
 
 
 class ProvisioningPayloadTests(unittest.TestCase):
@@ -153,6 +154,32 @@ class PairingTransportTests(unittest.TestCase):
         self.assertTrue(module.ports[0].closed)
         self.assertTrue(module.ports[1].closed)
         self.assertEqual(b"".join(module.ports[1].writes[1:]), b"orca-pair {}\n")
+
+
+class SerialPortSelectionTests(unittest.TestCase):
+    def test_waits_for_cardputer_port_to_reenumerate_after_cdc_reset(self):
+        snapshots = [[], [], ["/dev/cu.usbmodem101"]]
+        clock = iter([0.0, 0.25, 0.5])
+        calls = []
+
+        def globber(_pattern):
+            scan_index = len(calls) // 3
+            calls.append(_pattern)
+            paths = snapshots[min(scan_index, len(snapshots) - 1)]
+            return paths if _pattern == "/dev/cu.usbmodem*" else []
+
+        self.assertEqual(
+            serial_port.wait_for_single_port(
+                timeout_seconds=1.0,
+                poll_seconds=0.25,
+                platform_name="Darwin",
+                globber=globber,
+                monotonic=lambda: next(clock),
+                sleep=lambda _seconds: None,
+            ),
+            "/dev/cu.usbmodem101",
+        )
+        self.assertGreaterEqual(len(calls), 7)
 
 
 if __name__ == "__main__":

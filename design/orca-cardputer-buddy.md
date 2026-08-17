@@ -3,7 +3,7 @@
 ## v0.1 boundary
 
 `orca-buddy` is an independent app identity: `Orca Cardputer Buddy`, version
-`0.1.4`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
+`0.1.5`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
 independent firmware plus a local macOS bridge and MCP adapter. It does not use
 a Claude compatibility layer, characters, Claude graphics, private Orca hooks,
 terminal-content collection, or any Orca control protocol. The only automatic
@@ -37,28 +37,32 @@ bounds frames/text/queues/reconnect behavior, and never places credentials in
 source, artifacts, public logs, manifests, display, or MCP replies. Plain WS,
 query-token pairing, unauthenticated peers, certificate bypass, and implicit
 Wi-Fi pairing are outside contract. Wi-Fi SSID/passphrase are selected and
-entered on Cardputer, then stored with the complete versioned/checksummed
-configuration blob. Firmware uses direct station association at boot and after
-dropout, so a reachable saved SSID reconnects without a scan or passphrase
-prompt. Owner cancellation during a saved-network attempt leaves credentials
-unchanged but pauses automatic retries; **Del** cancels, and standard
+entered on Cardputer, then stored in a dedicated small versioned/checksummed
+Wi-Fi record. Pairing endpoint, bearer, and CA use a separate
+versioned/checksummed pairing record. This separation is intentional: ESP-IDF
+NVS is optimized for small values, and changing Wi-Fi must not rewrite or
+depend on certificate-sized pairing material. Firmware uses direct station
+association at boot and after dropout, so a reachable saved SSID reconnects
+without a scan or passphrase prompt. Owner cancellation during a saved-network
+attempt leaves credentials unchanged but pauses automatic retries; **Del** cancels, and standard
 Cardputer **Ctrl + [** supplies Escape because its keyboard has no physical
 Escape key. A later successful or manual connection resumes retry policy.
 
-Launcher preserves one shared NVS partition across apps. Normal Orca Buddy
-configuration writes use its `orca-buddy` NVS record. If that record rejects a
-larger combined Wi-Fi/pairing update, firmware keeps the old NVS record intact
-and stores complete checksummed replacement in app SPIFFS. First use initializes
-SPIFFS only after reading every byte and proving shared partition erased; a
-nonblank unmountable partition is never formatted. At boot valid SPIFFS
-fallback takes precedence; invalid/incomplete fallback is ignored and NVS stays
-source. Replacement uses staged/current/previous files so failed fallback update
-retains valid record. On-device **Forget** requires active record removal but
-does not fail merely because an unused fallback cannot mount; an active fallback
-still requires clearing both stores so stale NVS cannot return on reboot. This
-is reliability fallback for Launcher-shared storage, not new network, desktop,
-or export surface; bearer, CA, and Wi-Fi credentials remain hidden from
-display/logs.
+Launcher preserves one shared NVS partition across apps. Orca Buddy writes its
+small Wi-Fi record directly in the `orca-buddy` NVS namespace. Separate pairing
+record tries NVS, then safe SPIFFS fallback only if needed. First SPIFFS use
+initializes only after reading every byte and proving shared partition erased;
+a nonblank unmountable partition is never formatted. At boot valid pairing
+fallback takes precedence only for pairing; it never changes Wi-Fi source.
+Replacement uses staged/current/previous files so failed pairing update retains
+valid pairing. On-device **Forget** clears both independent records; unused
+pairing fallback cannot block Wi-Fi save. If pairing erase fails after Wi-Fi
+erase, the device reports the partial result and never represents that Wi-Fi
+as still active. Version `0.1.5` retires earlier
+combined development record, so operator saves Wi-Fi and performs USB pairing
+once after upgrade. This storage split is reliability policy for
+Launcher-shared storage, not new network, desktop, or export surface; bearer,
+CA, and Wi-Fi credentials remain hidden from display/logs.
 
 ## MCP lifecycle
 

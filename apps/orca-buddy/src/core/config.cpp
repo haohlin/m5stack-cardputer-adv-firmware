@@ -316,44 +316,71 @@ bool FallbackConfigStore::erase() {
 
 bool FallbackConfigStore::usingFallback() const { return usingFallback_; }
 
-ConfigManager::ConfigManager(ConfigStore& store) : store_(store) {}
+ConfigManager::ConfigManager(ConfigStore& wifiStore, ConfigStore& pairingStore)
+    : wifiStore_(wifiStore), pairingStore_(pairingStore) {}
 
 bool ConfigManager::load() {
-  std::vector<std::uint8_t> blob;
-  DeviceConfig candidate;
-  if (!store_.read(blob) || !decodeConfigBlob(blob, candidate)) {
-    active_ = DeviceConfig{};
-    return false;
+  DeviceConfig loaded;
+  bool found = false;
+
+  std::vector<std::uint8_t> wifiBlob;
+  DeviceConfig wifiRecord;
+  if (wifiStore_.read(wifiBlob) && decodeConfigBlob(wifiBlob, wifiRecord) &&
+      wifiRecord.hasWifi && !wifiRecord.hasPairing) {
+    loaded.hasWifi = true;
+    loaded.wifi = std::move(wifiRecord.wifi);
+    found = true;
   }
-  active_ = std::move(candidate);
-  return true;
+
+  std::vector<std::uint8_t> pairingBlob;
+  DeviceConfig pairingRecord;
+  if (pairingStore_.read(pairingBlob) && decodeConfigBlob(pairingBlob, pairingRecord) &&
+      !pairingRecord.hasWifi && pairingRecord.hasPairing) {
+    loaded.hasPairing = true;
+    loaded.pairing = std::move(pairingRecord.pairing);
+    found = true;
+  }
+
+  active_ = std::move(loaded);
+  return found;
 }
 
-bool ConfigManager::persist(const DeviceConfig& candidate) {
+bool ConfigManager::persistWifi(const WifiConfig& wifi) {
   std::vector<std::uint8_t> blob;
-  if (!encodeConfigBlob(candidate, blob) || !store_.write(blob)) return false;
-  active_ = candidate;
-  return true;
+  const DeviceConfig record{true, false, wifi, {}};
+  return encodeConfigBlob(record, blob) && wifiStore_.write(blob);
+}
+
+bool ConfigManager::persistPairing(const PairingConfig& pairing) {
+  std::vector<std::uint8_t> blob;
+  const DeviceConfig record{false, true, {}, pairing};
+  return encodeConfigBlob(record, blob) && pairingStore_.write(blob);
 }
 
 bool ConfigManager::updateWifi(const WifiConfig& wifi) {
   if (!validateWifi(wifi)) return false;
-  DeviceConfig candidate = active_;
-  candidate.hasWifi = true;
-  candidate.wifi = wifi;
-  return persist(candidate);
+  if (!persistWifi(wifi)) return false;
+  active_.hasWifi = true;
+  active_.wifi = wifi;
+  return true;
 }
 
 bool ConfigManager::updatePairing(const PairingConfig& pairing) {
   if (!validatePairing(pairing)) return false;
-  DeviceConfig candidate = active_;
-  candidate.hasPairing = true;
-  candidate.pairing = pairing;
-  return persist(candidate);
+  if (!persistPairing(pairing)) return false;
+  active_.hasPairing = true;
+  active_.pairing = pairing;
+  return true;
 }
 
 bool ConfigManager::forget() {
-  if (!store_.erase()) return false;
+  // Keep the Wi-Fi result truthful if the independent pairing record cannot
+  // be removed. In particular, never leave an erased Wi-Fi record presented
+  // to the UI as an active saved network.
+  if (!wifiStore_.erase()) return false;
+  active_.hasWifi = false;
+  active_.wifi = {};
+  if (!pairingStore_.erase()) return false;
   active_ = DeviceConfig{};
   return true;
 }
