@@ -1,6 +1,7 @@
 #include "orca/config.h"
 #include "orca/protocol.h"
 #include "orca/reconnect.h"
+#include "orca/storage.h"
 #include "orca/ui_model.h"
 
 #include <cstdint>
@@ -223,6 +224,28 @@ void testFallbackForgetDoesNotClaimSuccessWhenFallbackRecordRemains() {
   CHECK(!fallback.bytes.empty());
 }
 
+void testPrimaryConfigCanForgetWhenUnusedFallbackIsUnavailable() {
+  MemoryStore primary;
+  MemoryStore fallback;
+  orca::ConfigManager initial(primary);
+  CHECK(initial.updateWifi(validWifi()));
+
+  fallback.failErase = true;
+  orca::FallbackConfigStore store(primary, fallback);
+  orca::ConfigManager manager(store);
+  CHECK(manager.load());
+  CHECK(manager.forget());
+  CHECK(!manager.active().hasWifi);
+  CHECK(!manager.active().hasPairing);
+  CHECK(primary.bytes.empty());
+}
+
+void testFallbackMountPlanFormatsOnlyVerifiedBlankPartition() {
+  CHECK(orca::fallbackMountPlan(true, false) == orca::FallbackMountPlan::Mounted);
+  CHECK(orca::fallbackMountPlan(false, true) == orca::FallbackMountPlan::FormatBlank);
+  CHECK(orca::fallbackMountPlan(false, false) == orca::FallbackMountPlan::Refuse);
+}
+
 void testUiModelBoundsAndSanitization() {
   orca::ConsoleModel model;
   orca::ServerEvent snapshot;
@@ -362,6 +385,8 @@ int main() {
   testLoadFailsClosed();
   testFallbackStorePersistsCombinedConfigWhenPrimaryRejectsLargeUpdate();
   testFallbackForgetDoesNotClaimSuccessWhenFallbackRecordRemains();
+  testPrimaryConfigCanForgetWhenUnusedFallbackIsUnavailable();
+  testFallbackMountPlanFormatsOnlyVerifiedBlankPartition();
   testUiModelBoundsAndSanitization();
   testFrameParserAndNamedMessages();
   testDeviceMessageEncoding();

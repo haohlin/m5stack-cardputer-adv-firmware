@@ -3,7 +3,7 @@
 ## v0.1 boundary
 
 `orca-buddy` is an independent app identity: `Orca Cardputer Buddy`, version
-`0.1.3`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
+`0.1.4`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
 independent firmware plus a local macOS bridge and MCP adapter. It does not use
 a Claude compatibility layer, characters, Claude graphics, private Orca hooks,
 terminal-content collection, or any Orca control protocol. The only automatic
@@ -48,13 +48,17 @@ Escape key. A later successful or manual connection resumes retry policy.
 Launcher preserves one shared NVS partition across apps. Normal Orca Buddy
 configuration writes use its `orca-buddy` NVS record. If that record rejects a
 larger combined Wi-Fi/pairing update, firmware keeps the old NVS record intact
-and stores the complete checksummed replacement in app SPIFFS. It never formats
-SPIFFS automatically. At boot a valid SPIFFS fallback takes precedence; an
-invalid or incomplete fallback is ignored and NVS remains source. Replacement
-uses staged/current/previous files so a failed fallback update retains a valid
-record. Explicit on-device **Forget** clears both stores. This is a reliability
-fallback for Launcher-shared storage, not a new network, desktop, or export
-surface; bearer, CA, and Wi-Fi credentials remain hidden from display/logs.
+and stores complete checksummed replacement in app SPIFFS. First use initializes
+SPIFFS only after reading every byte and proving shared partition erased; a
+nonblank unmountable partition is never formatted. At boot valid SPIFFS
+fallback takes precedence; invalid/incomplete fallback is ignored and NVS stays
+source. Replacement uses staged/current/previous files so failed fallback update
+retains valid record. On-device **Forget** requires active record removal but
+does not fail merely because an unused fallback cannot mount; an active fallback
+still requires clearing both stores so stale NVS cannot return on reboot. This
+is reliability fallback for Launcher-shared storage, not new network, desktop,
+or export surface; bearer, CA, and Wi-Fi credentials remain hidden from
+display/logs.
 
 ## MCP lifecycle
 

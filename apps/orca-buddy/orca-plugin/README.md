@@ -70,7 +70,8 @@ Wi-Fi settings.
 
 Pairing requires a Cardputer USB serial device; being on Wi-Fi is not enough
 until pairing has succeeded once. A missing serial port now reports that exact
-condition, and multiple ports ask for other serial devices to be unplugged.
+condition, multiple ports ask for other serial devices to be unplugged, and a
+repeated ESP32-S3 USB CDC reset reports a separate safe failure class.
 For later diagnosis, plugin records only fixed lifecycle stages and error
 classes in mode-0600
 `~/.orca-cardputer-bridge/logs/plugin-events.jsonl`; it never records pairing

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { mkdtemp } from "node:fs/promises";
 
-import activate, { COMMANDS, createBridgeRuntime, createPluginController, selectUniquePrivateIpv4 } from "../main.mjs";
+import activate, { COMMANDS, createBridgeRuntime, createPluginController, runFixed, selectUniquePrivateIpv4 } from "../main.mjs";
 
 test("selectUniquePrivateIpv4 accepts exactly one LAN address", () => {
   assert.equal(selectUniquePrivateIpv4({
@@ -29,6 +29,18 @@ test("selectUniquePrivateIpv4 ignores macOS tunnel interfaces", () => {
     en0: [{ family: "IPv4", address: "192.168.31.209", internal: false }],
     utun8: [{ family: "IPv4", address: "172.29.230.152", internal: false }],
   }), "192.168.31.209");
+});
+
+test("fixed runner retains device rejection text for secret-free pairing classification", async () => {
+  await assert.rejects(
+    () => runFixed(process.execPath, ["-e", "process.stderr.write('device rejected pairing: ERR pairing persist failed; active config unchanged'); process.exit(1)"], {
+      cwd: process.cwd(),
+      env: process.env,
+      timeout: 5_000,
+    }),
+    (error) => error?.message === "local bridge command failed" &&
+      String(error?.stderr).includes("ERR pairing persist failed; active config unchanged"),
+  );
 });
 
 test("bridge runtime uses fixed local commands and a single private LAN address", async () => {
@@ -221,6 +233,37 @@ test("pair maps sender storage rejection to a safe failure code", async () => {
   await assert.rejects(
     () => runtime.pair(),
     (error) => error?.cardputerFailure === "pair-storage" && !/bearer|private/i.test(error.message),
+  );
+});
+
+test("pair maps repeated USB CDC reset to a specific safe failure code", async () => {
+  const bridgeRoot = "/repo/apps/orca-buddy/desktop-bridge";
+  const bridgeCli = `${bridgeRoot}/dist/bin/orca-cardputer.js`;
+  const bridgeWsModule = `${bridgeRoot}/node_modules/ws/index.js`;
+  const home = "/home/tester";
+  const config = `${home}/.orca-cardputer-bridge/config.json`;
+  const runtime = createBridgeRuntime({
+    pluginRoot: "/repo/apps/orca-buddy/orca-plugin",
+    bridgeRoot,
+    bridgeCli,
+    bridgeWsModule,
+    pairingSender: "/repo/apps/orca-buddy/scripts/write_pairing_serial.sh",
+    home,
+    regularFile: async (path) => path === bridgeCli || path === bridgeWsModule || path === config,
+    run: async (executable, args) => {
+      if (executable === "node" && args[1] === "provision") return { stdout: "", stderr: "" };
+      if (executable === "/bin/bash") {
+        throw Object.assign(new Error("sender failed"), {
+          stderr: "pairing: USB serial device reset during pairing and did not reconnect",
+        });
+      }
+      throw new Error("unexpected command");
+    },
+  });
+
+  await assert.rejects(
+    () => runtime.pair(),
+    (error) => error?.cardputerFailure === "pair-usb-reset" && !/pairing secret|bearer|token/i.test(error.message),
   );
 });
 

@@ -11,6 +11,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
   -I"$APP_ROOT/include" \
   "$APP_ROOT/tests/test_orca_core.cpp" \
   "$APP_ROOT/src/core/config.cpp" \
+  "$APP_ROOT/src/core/storage.cpp" \
   "$APP_ROOT/src/core/protocol.cpp" \
   "$APP_ROOT/src/core/ui_model.cpp" \
   "$APP_ROOT/src/core/reconnect.cpp" \

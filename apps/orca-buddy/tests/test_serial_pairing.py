@@ -100,6 +100,60 @@ class PairingTransportTests(unittest.TestCase):
         self.assertTrue(all(len(frame) <= 16 for frame in port.writes[1:]))
         self.assertTrue(port.closed)
 
+    def test_reopens_after_initial_usb_cdc_device_reset(self):
+        class FakeSerialException(Exception):
+            pass
+
+        class ResettingPort:
+            def __init__(self, reset):
+                self.reset = reset
+                self.closed = False
+                self.writes = []
+
+            def reset_input_buffer(self):
+                return None
+
+            def write(self, payload):
+                if self.reset:
+                    raise FakeSerialException("read failed: [Errno 6] Device not configured")
+                self.writes.append(bytes(payload))
+                return len(payload)
+
+            def flush(self):
+                return None
+
+            def read(self, _maximum):
+                return b"OK secure pairing saved\n"
+
+            def close(self):
+                self.closed = True
+
+        class FakeSerialModule:
+            SerialException = FakeSerialException
+
+            def __init__(self):
+                self.ports = [ResettingPort(True), ResettingPort(False)]
+                self.calls = 0
+
+            def Serial(self, _path, _baudrate, timeout, write_timeout):
+                self.calls += 1
+                self.assertEqual(timeout, 0.2)
+                self.assertEqual(write_timeout, 1)
+                return self.ports[self.calls - 1]
+
+            def assertEqual(self, left, right):
+                if left != right:
+                    raise AssertionError(f"{left!r} != {right!r}")
+
+        module = FakeSerialModule()
+        with patch.dict(sys.modules, {"serial": module}), patch.object(serial_pairing.time, "sleep"):
+            serial_pairing.send_pairing("/dev/cu.usbmodem-test", b"orca-pair {}\n")
+
+        self.assertEqual(module.calls, 2)
+        self.assertTrue(module.ports[0].closed)
+        self.assertTrue(module.ports[1].closed)
+        self.assertEqual(b"".join(module.ports[1].writes[1:]), b"orca-pair {}\n")
+
 
 if __name__ == "__main__":
     unittest.main()

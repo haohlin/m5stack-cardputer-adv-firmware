@@ -1,3 +1,3 @@
 #pragma once
 
-#define ORCA_BUDDY_VERSION "0.1.3"
+#define ORCA_BUDDY_VERSION "0.1.4"

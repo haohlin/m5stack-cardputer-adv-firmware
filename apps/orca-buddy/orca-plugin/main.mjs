@@ -21,6 +21,7 @@ const FAILURE_MESSAGES = Object.freeze({
   "pair-rejected": "device rejected USB pairing",
   "pair-usb-none": "no Cardputer USB serial port detected",
   "pair-usb-multiple": "multiple USB serial ports detected; leave only Cardputer connected",
+  "pair-usb-reset": "Cardputer USB serial reset repeatedly during pairing",
   "pair-sender": "local USB pairing sender failed",
 });
 
@@ -33,6 +34,7 @@ const DIAGNOSTIC_EVENTS = new Set([
   "pair.failed.rejected",
   "pair.failed.usb-none",
   "pair.failed.usb-multiple",
+  "pair.failed.usb-reset",
   "pair.failed.sender",
   "bridge.failed.stale-lan-binding",
   "bridge.lan-binding-replaced",
@@ -44,6 +46,7 @@ const DIAGNOSTIC_EVENT_FOR_FAILURE = Object.freeze({
   "pair-rejected": "pair.failed.rejected",
   "pair-usb-none": "pair.failed.usb-none",
   "pair-usb-multiple": "pair.failed.usb-multiple",
+  "pair-usb-reset": "pair.failed.usb-reset",
   "pair-sender": "pair.failed.sender",
 });
 
@@ -128,7 +131,7 @@ async function appendDiagnostic(paths, event) {
   }
 }
 
-async function runFixed(executable, args, options) {
+export async function runFixed(executable, args, options) {
   try {
     return await execFileAsync(executable, args, {
       cwd: options.cwd,
@@ -139,8 +142,10 @@ async function runFixed(executable, args, options) {
       timeout: options.timeout,
       windowsHide: true,
     });
-  } catch {
-    throw new Error("local bridge command failed");
+  } catch (error) {
+    const failure = new Error("local bridge command failed");
+    if (typeof error?.stderr === "string") failure.stderr = error.stderr;
+    throw failure;
   }
 }
 
@@ -164,6 +169,9 @@ function classifyPairingSenderFailure(error) {
     return cardputerFailure("pair-usb-none");
   }
   if (output.includes("Multiple Cardputer USB serial ports detected.")) return cardputerFailure("pair-usb-multiple");
+  if (output.includes("USB serial device reset during pairing and did not reconnect")) {
+    return cardputerFailure("pair-usb-reset");
+  }
   return cardputerFailure("pair-sender");
 }
 

@@ -1,6 +1,6 @@
 # Orca Cardputer Buddy
 
-Independent Orca Cardputer app contract, version `0.1.3`. Firmware header
+Independent Orca Cardputer app contract, version `0.1.4`. Firmware header
 shows this version on device and release checks keep it equal to bridge/plugin
 metadata.
 
@@ -43,6 +43,11 @@ The firmware accepts one complete `orca-pair` line and emits only a success or
 failure acknowledgement. `W` scans and configures Wi-Fi on-device; `F` opens a
 local forget confirmation; `P` enters a prompt draft. Pairing bearer and CA
 contents are never shown. Normal workflow has no direct-flash helper.
+
+If Launcher-shared NVS rejects a larger Wi-Fi-plus-pairing record, firmware
+uses its SPIFFS fallback. It initializes that fallback only when the entire
+shared partition is verified erased; it never formats nonblank data. USB pairing
+reopens up to three times if ESP32-S3 CDC resets immediately after port open.
 
 If pairing fails, use **Orca Cardputer: Bridge Status** first. It reports
 `failed` when launchd records a nonzero bridge exit rather than treating a

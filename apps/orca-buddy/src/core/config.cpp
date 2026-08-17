@@ -302,6 +302,12 @@ bool FallbackConfigStore::write(const std::vector<std::uint8_t>& input) {
 }
 
 bool FallbackConfigStore::erase() {
+  if (!usingFallback_) {
+    const bool primaryErased = primary_.erase();
+    if (!primaryErased) return false;
+    static_cast<void>(fallback_.erase());
+    return true;
+  }
   const bool primaryErased = primary_.erase();
   const bool fallbackErased = fallback_.erase();
   usingFallback_ = false;

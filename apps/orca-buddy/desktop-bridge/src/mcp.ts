@@ -134,7 +134,7 @@ export function createMcpHandler(options: McpHandlerOptions): (message: JsonRpcR
           result: {
             protocolVersion: "2025-06-18",
             capabilities: { tools: {} },
-            serverInfo: { name: "orca-cardputer-mcp", version: "0.1.3" }
+            serverInfo: { name: "orca-cardputer-mcp", version: "0.1.4" }
           }
         };
       }

@@ -5,14 +5,17 @@
 #include <SPIFFS.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
+#include <esp_partition.h>
 
 #include "orca/config.h"
 #include "orca/protocol.h"
 #include "orca/reconnect.h"
+#include "orca/storage.h"
 #include "orca/ui_model.h"
 #include "version.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <string>
@@ -28,6 +31,33 @@ constexpr std::uint8_t kHidLeftBracket = 0x2f;
 constexpr const char* kFallbackConfigPath = "/orca-buddy-config.bin";
 constexpr const char* kFallbackStagingPath = "/orca-buddy-config.next";
 constexpr const char* kFallbackPreviousPath = "/orca-buddy-config.prev";
+constexpr const char* kSpiffsPartitionLabel = "spiffs";
+constexpr std::size_t kPartitionProbeBytes = 256;
+
+bool spiffsPartitionIsBlank() {
+  const esp_partition_t* partition = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS,
+      kSpiffsPartitionLabel);
+  if (partition == nullptr) return false;
+  std::array<std::uint8_t, kPartitionProbeBytes> bytes{};
+  for (std::size_t offset = 0; offset < partition->size; offset += bytes.size()) {
+    const std::size_t remaining = partition->size - offset;
+    const std::size_t count = std::min(bytes.size(), remaining);
+    if (esp_partition_read(partition, offset, bytes.data(), count) != ESP_OK) return false;
+    if (std::any_of(bytes.begin(), bytes.begin() + count,
+                    [](std::uint8_t value) { return value != 0xff; })) return false;
+  }
+  return true;
+}
+
+bool mountFallbackStorage() {
+  if (SPIFFS.begin(false)) return true;
+  if (orca::fallbackMountPlan(false, spiffsPartitionIsBlank()) !=
+      orca::FallbackMountPlan::FormatBlank) {
+    return false;
+  }
+  return SPIFFS.begin(true);
+}
 
 class PreferencesConfigStore final : public orca::ConfigStore {
  public:
@@ -71,13 +101,13 @@ class PreferencesConfigStore final : public orca::ConfigStore {
 class SpiffsConfigStore final : public orca::ConfigStore {
  public:
   bool read(std::vector<std::uint8_t>& output) override {
-    if (!SPIFFS.begin(false)) return false;
+    if (!mountFallbackStorage()) return false;
     if (readPath(kFallbackConfigPath, output)) return true;
     return readPath(kFallbackPreviousPath, output);
   }
 
   bool write(const std::vector<std::uint8_t>& input) override {
-    if (input.empty() || input.size() > kMaximumSerialCommandBytes || !SPIFFS.begin(false)) {
+    if (input.empty() || input.size() > kMaximumSerialCommandBytes || !mountFallbackStorage()) {
       return false;
     }
     SPIFFS.remove(kFallbackStagingPath);
@@ -108,7 +138,7 @@ class SpiffsConfigStore final : public orca::ConfigStore {
   }
 
   bool erase() override {
-    if (!SPIFFS.begin(false)) return false;
+    if (!mountFallbackStorage()) return false;
     bool removed = true;
     for (const char* path : {kFallbackConfigPath, kFallbackStagingPath, kFallbackPreviousPath}) {
       if (SPIFFS.exists(path) && !SPIFFS.remove(path)) removed = false;
