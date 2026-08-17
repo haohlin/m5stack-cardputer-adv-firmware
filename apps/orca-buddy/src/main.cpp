@@ -654,7 +654,21 @@ void performForget() {
   startWifiScan();
 }
 
+void reportSerialStatus() {
+  const auto& active = configManager.active();
+  Serial.printf(
+      "STATUS version=%s saved_wifi=%s wifi=%s saved_pairing=%s bridge=%s pairing_store=%s\n",
+      ORCA_BUDDY_VERSION, active.hasWifi ? "yes" : "no",
+      WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
+      active.hasPairing ? "yes" : "no", webSocketConnected ? "connected" : "disconnected",
+      pairingConfigStore.usingFallback() ? "fallback" : "nvs");
+}
+
 void handleSerialCommand(const std::string& command) {
+  if (command == "status") {
+    reportSerialStatus();
+    return;
+  }
   orca::PairingConfig pairing;
   if (orca::parseProvisioningCommand(command, pairing)) {
     if (!configManager.updatePairing(pairing)) {

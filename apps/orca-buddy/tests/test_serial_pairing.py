@@ -12,6 +12,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 import serial_pairing
 import serial_port
+import serial_status
 
 
 class ProvisioningPayloadTests(unittest.TestCase):
@@ -180,6 +181,25 @@ class SerialPortSelectionTests(unittest.TestCase):
             "/dev/cu.usbmodem101",
         )
         self.assertGreaterEqual(len(calls), 7)
+
+
+class DeviceStatusTests(unittest.TestCase):
+    def test_accepts_only_the_fixed_secret_free_device_status_line(self):
+        line = (
+            b"STATUS version=0.1.6 saved_wifi=yes wifi=connected "
+            b"saved_pairing=yes bridge=connected pairing_store=nvs\n"
+        )
+        self.assertEqual(
+            serial_status.parse_device_status(line),
+            "version=0.1.6 saved_wifi=yes wifi=connected saved_pairing=yes "
+            "bridge=connected pairing_store=nvs",
+        )
+
+    def test_rejects_malformed_or_secret_bearing_serial_output(self):
+        with self.assertRaisesRegex(ValueError, "invalid device status"):
+            serial_status.parse_device_status(b"STATUS bearer=private\n")
+        with self.assertRaisesRegex(ValueError, "invalid device status"):
+            serial_status.parse_device_status(b"STATUS version=0.1.6 wifi=unknown\n")
 
 
 if __name__ == "__main__":

@@ -64,10 +64,15 @@ device returns `OK secure pairing saved`. It waits through a short macOS USB
 CDC re-enumeration, resynchronizes interrupted serial input, and sends paced
 frames, so reruns do not reuse a partial command. Plugin logs only safe stages
 and fixed failure reasons; it never logs pairing material or raw subprocess
-output. Firmware `0.1.5` stores Wi-Fi separately from bridge pairing, so a
+output. Firmware `0.1.6` stores Wi-Fi separately from bridge pairing, so a
 pairing-store failure cannot prevent Wi-Fi save. If its independent erase
 fails, the device truthfully reports that Wi-Fi was forgotten while pairing
 remains, rather than claiming the old Wi-Fi config is still active.
+
+**Orca Cardputer: Device Diagnostics** uses USB to display only a validated,
+fixed status line: firmware version, saved/live Wi-Fi, saved pairing, live WSS
+bridge, and `nvs`/`fallback` pairing storage. The event log holds only fixed
+request/result/failure classes and rejects arbitrary serial output.
 
 Pairing requires a Cardputer USB serial device; being on Wi-Fi is not enough
 until pairing has succeeded once. A missing serial port now reports that exact

@@ -206,6 +206,66 @@ test("controller reports a specific secret-free device storage failure", async (
   assert.doesNotMatch(`${notices.join(" ")} ${logs.join(" ")}`, /bearer|private/i);
 });
 
+test("controller shows a fixed secret-free USB device diagnostic", async () => {
+  const notices = [];
+  const registered = new Map();
+  const controller = createPluginController({
+    runtime: {
+      enable: async () => {},
+      pair: async () => {},
+      status: async () => "running",
+      deviceStatus: async () =>
+        "version=0.1.6 saved_wifi=yes wifi=connected saved_pairing=yes bridge=connected pairing_store=nvs",
+      disable: async () => {},
+    },
+    notify: async (body) => notices.push(body),
+    log: () => {},
+  });
+
+  controller.register({ register: (id, handler) => registered.set(id, handler) });
+  await registered.get(COMMANDS.diagnostics)();
+
+  assert.match(notices[0], /saved_wifi=yes.*bridge=connected/);
+  assert.doesNotMatch(notices[0], /ssid|bearer|token|certificate|private/i);
+});
+
+test("device diagnostics runs only its fixed helper and validates its output", async () => {
+  const calls = [];
+  const reader = "/repo/apps/orca-buddy/scripts/read_device_status.sh";
+  const runtime = createBridgeRuntime({
+    pluginRoot: "/repo/apps/orca-buddy/orca-plugin",
+    statusReader: reader,
+    home: "/home/tester",
+    run: async (executable, args, options) => {
+      calls.push({ executable, args, options });
+      return {
+        stdout: "version=0.1.6 saved_wifi=yes wifi=connected saved_pairing=yes bridge=connected pairing_store=nvs\n",
+        stderr: "",
+      };
+    },
+  });
+
+  assert.equal(
+    await runtime.deviceStatus(),
+    "version=0.1.6 saved_wifi=yes wifi=connected saved_pairing=yes bridge=connected pairing_store=nvs",
+  );
+  assert.deepEqual(calls.map(({ executable, args }) => [executable, args]), [
+    ["/bin/bash", [reader]],
+  ]);
+  assert.equal("CARDPUTER_ADV_PORT" in calls[0].options.env, false);
+
+  const invalid = createBridgeRuntime({
+    pluginRoot: "/repo/apps/orca-buddy/orca-plugin",
+    statusReader: reader,
+    home: "/home/tester",
+    run: async () => ({ stdout: "bearer=must-not-display\n", stderr: "" }),
+  });
+  await assert.rejects(
+    () => invalid.deviceStatus(),
+    (error) => error?.cardputerFailure === "status-invalid" && !/bearer|token|private/i.test(error.message),
+  );
+});
+
 test("pair maps sender storage rejection to a safe failure code", async () => {
   const bridgeRoot = "/repo/apps/orca-buddy/desktop-bridge";
   const bridgeCli = `${bridgeRoot}/dist/bin/orca-cardputer.js`;

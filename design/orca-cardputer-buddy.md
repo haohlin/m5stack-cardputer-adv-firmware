@@ -3,7 +3,7 @@
 ## v0.1 boundary
 
 `orca-buddy` is an independent app identity: `Orca Cardputer Buddy`, version
-`0.1.5`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
+`0.1.6`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
 independent firmware plus a local macOS bridge and MCP adapter. It does not use
 a Claude compatibility layer, characters, Claude graphics, private Orca hooks,
 terminal-content collection, or any Orca control protocol. The only automatic
@@ -58,11 +58,18 @@ Replacement uses staged/current/previous files so failed pairing update retains
 valid pairing. On-device **Forget** clears both independent records; unused
 pairing fallback cannot block Wi-Fi save. If pairing erase fails after Wi-Fi
 erase, the device reports the partial result and never represents that Wi-Fi
-as still active. Version `0.1.5` retires earlier
+as still active. Version `0.1.6` retires earlier
 combined development record, so operator saves Wi-Fi and performs USB pairing
 once after upgrade. This storage split is reliability policy for
 Launcher-shared storage, not new network, desktop, or export surface; bearer,
 CA, and Wi-Fi credentials remain hidden from display/logs.
+
+USB `status` is a diagnostic-only command with one exact allowed result:
+firmware version; saved/live Wi-Fi; saved pairing; live WSS bridge; and pairing
+storage (`nvs` or `fallback`). The supplied host helper and desktop plugin
+validate that entire shape before presenting it or writing a fixed event class.
+An SSID, passphrase, bearer, CA, endpoint, raw serial line, or arbitrary device
+content is never presented or logged.
 
 ## MCP lifecycle
 
@@ -77,9 +84,9 @@ credentials remain bridge/device-private and are never returned by MCP.
 
 `apps/orca-buddy/orca-plugin` is an experimental Orca Desktop development
 plugin. User loads folder through **Settings → Plugins → Development**, reviews
-manifest, then enables it. It contributes one sidebar panel and four global
+manifest, then enables it. It contributes one sidebar panel and five global
 Command Palette entries: enable bridge, pair connected device, bridge status,
-and disable bridge. Panel uses public panel bridge for bounded focused-worktree
+device diagnostics, and disable bridge. Panel uses public panel bridge for bounded focused-worktree
 name, branch, and terminal count; it has no live sidecar channel. Device screen
 remains runtime connection source.
 
@@ -102,9 +109,10 @@ command first requires configured bridge, creates unique protected payload, and
 invokes existing sender only after user selected explicit command. It clears
 `CARDPUTER_ADV_PORT` so sender detects exactly one attached Cardputer port.
 Plugin removal retains bridge/pairing state; disable only stops LaunchAgent.
-Plugin logs only fixed pairing lifecycle phases and fixed safe failure classes:
-payload created, USB transfer begun, device acknowledgement, unavailable USB,
-missing acknowledgement, device rejection, or saved-config failure. It never
+Plugin logs only fixed pairing/device-diagnostic lifecycle phases and fixed safe
+failure classes: payload created, USB transfer begun, device acknowledgement,
+unavailable USB, missing acknowledgement, device rejection, saved-config
+failure, and fixed diagnostic request/result/failure classes. It never
 logs subprocess output, payload content, bearer, CA, Wi-Fi credentials, or
 serial input.
 

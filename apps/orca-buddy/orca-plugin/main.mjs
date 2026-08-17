@@ -13,7 +13,9 @@ const BRIDGE_ROOT = resolve(PLUGIN_ROOT, "..", "desktop-bridge");
 const BRIDGE_CLI = join(BRIDGE_ROOT, "dist", "bin", "orca-cardputer.js");
 const BRIDGE_WS_MODULE = join(BRIDGE_ROOT, "node_modules", "ws", "index.js");
 const PAIRING_SENDER = resolve(PLUGIN_ROOT, "..", "scripts", "write_pairing_serial.sh");
+const STATUS_READER = resolve(PLUGIN_ROOT, "..", "scripts", "read_device_status.sh");
 const BRIDGE_PORT = "17654";
+const DEVICE_STATUS_PATTERN = /^version=[0-9]+\.[0-9]+\.[0-9]+ saved_wifi=(?:yes|no) wifi=(?:connected|disconnected) saved_pairing=(?:yes|no) bridge=(?:connected|disconnected) pairing_store=(?:nvs|fallback)$/;
 
 const FAILURE_MESSAGES = Object.freeze({
   "pair-storage": "device rejected pairing because its saved configuration could not be updated",
@@ -23,6 +25,12 @@ const FAILURE_MESSAGES = Object.freeze({
   "pair-usb-multiple": "multiple USB serial ports detected; leave only Cardputer connected",
   "pair-usb-reset": "Cardputer USB serial reset repeatedly during pairing",
   "pair-sender": "local USB pairing sender failed",
+  "status-usb-none": "no Cardputer USB serial port detected",
+  "status-usb-multiple": "multiple USB serial ports detected; leave only Cardputer connected",
+  "status-usb-reset": "Cardputer USB serial reset repeatedly during diagnostics",
+  "status-no-response": "Cardputer did not return a USB diagnostic response",
+  "status-invalid": "Cardputer returned an invalid USB diagnostic response",
+  "status-sender": "local USB diagnostic helper failed",
 });
 
 const DIAGNOSTIC_EVENTS = new Set([
@@ -36,6 +44,14 @@ const DIAGNOSTIC_EVENTS = new Set([
   "pair.failed.usb-multiple",
   "pair.failed.usb-reset",
   "pair.failed.sender",
+  "device.status-requested",
+  "device.status-read",
+  "device.status-failed.usb-none",
+  "device.status-failed.usb-multiple",
+  "device.status-failed.usb-reset",
+  "device.status-failed.no-response",
+  "device.status-failed.invalid",
+  "device.status-failed.sender",
   "bridge.failed.stale-lan-binding",
   "bridge.lan-binding-replaced",
 ]);
@@ -54,6 +70,7 @@ export const COMMANDS = Object.freeze({
   enable: "enable-bridge",
   pair: "pair-connected-device",
   status: "bridge-status",
+  diagnostics: "device-diagnostics",
   disable: "disable-bridge",
 });
 
@@ -175,6 +192,41 @@ function classifyPairingSenderFailure(error) {
   return cardputerFailure("pair-sender");
 }
 
+function classifyStatusReaderFailure(error) {
+  const output = `${error?.stderr ?? ""}\n${error?.message ?? ""}`;
+  if (output.includes("Cardputer USB serial port not detected.") ||
+      output.includes("could not open port") || output.includes("Device not configured")) {
+    return cardputerFailure("status-usb-none");
+  }
+  if (output.includes("Multiple Cardputer USB serial ports detected.")) {
+    return cardputerFailure("status-usb-multiple");
+  }
+  if (output.includes("USB serial device reset during status query and did not reconnect")) {
+    return cardputerFailure("status-usb-reset");
+  }
+  if (output.includes("device did not return USB status")) return cardputerFailure("status-no-response");
+  if (output.includes("invalid device status") || output.includes("device rejected USB status query")) {
+    return cardputerFailure("status-invalid");
+  }
+  return cardputerFailure("status-sender");
+}
+
+function statusDiagnosticEvent(code) {
+  return {
+    "status-usb-none": "device.status-failed.usb-none",
+    "status-usb-multiple": "device.status-failed.usb-multiple",
+    "status-usb-reset": "device.status-failed.usb-reset",
+    "status-no-response": "device.status-failed.no-response",
+    "status-invalid": "device.status-failed.invalid",
+  }[code] ?? "device.status-failed.sender";
+}
+
+export function validateDeviceStatus(value) {
+  const status = String(value).trim();
+  if (!DEVICE_STATUS_PATTERN.test(status)) throw cardputerFailure("status-invalid");
+  return status;
+}
+
 function safeFailureMessage(error) {
   return FAILURE_MESSAGES[error?.cardputerFailure] ?? "local bridge command failed";
 }
@@ -185,6 +237,7 @@ export function createBridgeRuntime({
   bridgeCli = BRIDGE_CLI,
   bridgeWsModule = BRIDGE_WS_MODULE,
   pairingSender = PAIRING_SENDER,
+  statusReader = STATUS_READER,
   home = homedir(),
   nodePath = "node",
   interfaces = networkInterfaces,
@@ -284,6 +337,26 @@ export function createBridgeRuntime({
       return bridgeStatus();
     },
 
+    async deviceStatus() {
+      const serialEnvironment = { ...process.env };
+      delete serialEnvironment.CARDPUTER_ADV_PORT;
+      await appendDiagnostic(paths, "device.status-requested");
+      try {
+        const { stdout } = await run("/bin/bash", [statusReader], {
+          cwd: pluginRoot,
+          env: serialEnvironment,
+          timeout: 12_000,
+        });
+        const status = validateDeviceStatus(stdout);
+        await appendDiagnostic(paths, "device.status-read");
+        return status;
+      } catch (error) {
+        const failure = error?.cardputerFailure ? error : classifyStatusReaderFailure(error);
+        await appendDiagnostic(paths, statusDiagnosticEvent(failure.cardputerFailure));
+        throw failure;
+      }
+    },
+
     async disable() {
       const state = await bridgeStatus();
       if (state === "stopped" || state === "not configured") return state;
@@ -326,6 +399,15 @@ export function createPluginController({ runtime, notify, log }) {
           return state;
         } catch (error) {
           return reportFailure("bridge status", error);
+        }
+      });
+      commands.register(COMMANDS.diagnostics, async () => {
+        try {
+          const status = await runtime.deviceStatus();
+          await notify(`Cardputer USB diagnostics: ${status}.`);
+          return status;
+        } catch (error) {
+          return reportFailure("device diagnostics", error);
         }
       });
       commands.register(COMMANDS.disable, async () => {
