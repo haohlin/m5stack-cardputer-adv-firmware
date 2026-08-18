@@ -64,10 +64,9 @@ device returns `OK secure pairing saved`. It waits through a short macOS USB
 CDC re-enumeration, resynchronizes interrupted serial input, and sends paced
 frames, so reruns do not reuse a partial command. Plugin logs only safe stages
 and fixed failure reasons; it never logs pairing material or raw subprocess
-output. Firmware `0.1.6` stores Wi-Fi separately from bridge pairing, so a
-pairing-store failure cannot prevent Wi-Fi save. If its independent erase
-fails, the device truthfully reports that Wi-Fi was forgotten while pairing
-remains, rather than claiming the old Wi-Fi config is still active.
+output. Firmware `0.1.7` uses Env Monitor's direct small `Preferences` Wi-Fi
+keys. It deletes obsolete combined Wi-Fi records at boot and never attempts a
+custom Wi-Fi config-blob write. Pairing remains independent.
 
 **Orca Cardputer: Device Diagnostics** uses USB to display only a validated,
 fixed status line: firmware version, saved/live Wi-Fi, saved pairing, live WSS

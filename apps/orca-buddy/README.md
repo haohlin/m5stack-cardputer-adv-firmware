@@ -1,6 +1,6 @@
 # Orca Cardputer Buddy
 
-Independent Orca Cardputer app contract, version `0.1.6`. Firmware header
+Independent Orca Cardputer app contract, version `0.1.7`. Firmware header
 shows this version on device and release checks keep it equal to bridge/plugin
 metadata.
 
@@ -44,13 +44,12 @@ failure acknowledgement. `W` scans and configures Wi-Fi on-device; `F` opens a
 local forget confirmation; `P` enters a prompt draft. Pairing bearer and CA
 contents are never shown. Normal workflow has no direct-flash helper.
 
-Wi-Fi is persisted as its own small checksummed record. Saving a connected
-network never rewrites bridge bearer or CA material, so Wi-Fi setup does not
-depend on large-pairing storage. Pairing uses a separate record and may use its
-safe SPIFFS fallback only when needed. Version `0.1.6` does not reuse the
-unreliable combined record from earlier development builds: save Wi-Fi, then
-pair once again. USB pairing waits for a transient ESP32-S3 CDC re-enumeration
-before it sends paced frames.
+Wi-Fi now uses Env Monitor's direct `Preferences` pattern: one open handle,
+small `ssid` and `pass` string keys, and direct station association. Version
+`0.1.7` discards obsolete Orca Buddy combined Wi-Fi records at boot, then saves
+only those direct keys. Pairing stays independent. Save Wi-Fi, then pair once
+again. USB pairing waits for a transient ESP32-S3 CDC re-enumeration before it
+sends paced frames.
 
 The USB command `status` has one fixed secret-free reply: firmware version,
 saved/live Wi-Fi, saved pairing, live WSS bridge, and pairing store. Use the

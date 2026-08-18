@@ -3,7 +3,7 @@
 ## v0.1 boundary
 
 `orca-buddy` is an independent app identity: `Orca Cardputer Buddy`, version
-`0.1.6`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
+`0.1.7`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
 independent firmware plus a local macOS bridge and MCP adapter. It does not use
 a Claude compatibility layer, characters, Claude graphics, private Orca hooks,
 terminal-content collection, or any Orca control protocol. The only automatic
@@ -37,11 +37,11 @@ bounds frames/text/queues/reconnect behavior, and never places credentials in
 source, artifacts, public logs, manifests, display, or MCP replies. Plain WS,
 query-token pairing, unauthenticated peers, certificate bypass, and implicit
 Wi-Fi pairing are outside contract. Wi-Fi SSID/passphrase are selected and
-entered on Cardputer, then stored in a dedicated small versioned/checksummed
-Wi-Fi record. Pairing endpoint, bearer, and CA use a separate
-versioned/checksummed pairing record. This separation is intentional: ESP-IDF
-NVS is optimized for small values, and changing Wi-Fi must not rewrite or
-depend on certificate-sized pairing material. Firmware uses direct station
+entered on Cardputer, then stored with Env Monitor's direct long-lived
+`Preferences` handle and separate `ssid`/`pass` string keys. Pairing endpoint,
+bearer, and CA use a separate versioned/checksummed pairing record. This
+separation is intentional: changing Wi-Fi must not rewrite or depend on
+certificate-sized pairing material. Firmware uses direct station
 association at boot and after dropout, so a reachable saved SSID reconnects
 without a scan or passphrase prompt. Owner cancellation during a saved-network
 attempt leaves credentials unchanged but pauses automatic retries; **Del** cancels, and standard
@@ -58,9 +58,9 @@ Replacement uses staged/current/previous files so failed pairing update retains
 valid pairing. On-device **Forget** clears both independent records; unused
 pairing fallback cannot block Wi-Fi save. If pairing erase fails after Wi-Fi
 erase, the device reports the partial result and never represents that Wi-Fi
-as still active. Version `0.1.6` retires earlier
-combined development record, so operator saves Wi-Fi and performs USB pairing
-once after upgrade. This storage split is reliability policy for
+as still active. Version `0.1.7` deletes earlier combined Wi-Fi development
+records and uses only Env Monitor-style string keys, so operator saves Wi-Fi
+and performs USB pairing once after upgrade. This storage split is reliability policy for
 Launcher-shared storage, not new network, desktop, or export surface; bearer,
 CA, and Wi-Fi credentials remain hidden from display/logs.
 

@@ -102,6 +102,13 @@ class PreferencesConfigStore final : public orca::ConfigStore {
   const char* key_;
 };
 
+class VolatileConfigStore final : public orca::ConfigStore {
+ public:
+  bool read(std::vector<std::uint8_t>&) override { return false; }
+  bool write(const std::vector<std::uint8_t>&) override { return false; }
+  bool erase() override { return true; }
+};
+
 class SpiffsConfigStore final : public orca::ConfigStore {
  public:
   bool read(std::vector<std::uint8_t>& output) override {
@@ -187,11 +194,14 @@ enum class UiMode {
 
 enum class WifiAttempt { None, Stored, Candidate };
 
-PreferencesConfigStore wifiConfigStore("wifi");
+// Same direct Preferences pattern used by Env Monitor. Wi-Fi is deliberately
+// not encoded into Orca Buddy's pairing record or a custom blob.
+Preferences wifiPreferences;
+VolatileConfigStore unusedWifiConfigStore;
 PreferencesConfigStore pairingPreferencesStore("pair");
 SpiffsConfigStore spiffsConfigStore;
 orca::FallbackConfigStore pairingConfigStore(pairingPreferencesStore, spiffsConfigStore);
-orca::ConfigManager configManager(wifiConfigStore, pairingConfigStore);
+orca::ConfigManager configManager(unusedWifiConfigStore, pairingConfigStore);
 orca::ConsoleModel consoleModel;
 orca::ReconnectBackoff reconnectBackoff;
 orca::StoredWifiRetryPolicy storedWifiRetry;
@@ -203,6 +213,8 @@ std::vector<WifiChoice> wifiChoices;
 std::size_t selectedWifi = 0;
 std::size_t rowOffset = 0;
 orca::WifiConfig candidateWifi;
+orca::WifiConfig savedWifi;
+bool hasSavedWifi = false;
 std::uint32_t wifiAttemptDeadline = 0;
 std::uint32_t nextReconnectAt = 0;
 bool wifiWasConnected = false;
@@ -214,6 +226,44 @@ std::string detailText;
 std::string authorizationHeader;
 std::string serialLine;
 bool serialOverflow = false;
+
+void discardLegacyWifiRecords() {
+  // Older development builds stored Wi-Fi in these records. They are not read
+  // by this direct Preferences path and can otherwise consume shared NVS room.
+  Preferences legacy;
+  if (!legacy.begin("orca-buddy", false)) return;
+  legacy.remove("wifi");
+  legacy.remove("config");
+  legacy.end();
+}
+
+void loadSavedWifi() {
+  char ssid[33]{};
+  char passphrase[65]{};
+  wifiPreferences.getString("ssid", ssid, sizeof(ssid));
+  wifiPreferences.getString("pass", passphrase, sizeof(passphrase));
+  const orca::WifiConfig candidate{ssid, passphrase};
+  if (!orca::validateWifi(candidate)) return;
+  savedWifi = candidate;
+  hasSavedWifi = true;
+}
+
+void saveWifi(const orca::WifiConfig& wifi) {
+  // Keep these exact small String keys independent of certificate-sized bridge
+  // storage, matching Env Monitor's proven save flow.
+  wifiPreferences.putString("ssid", wifi.ssid.c_str());
+  if (wifi.passphrase.empty()) wifiPreferences.remove("pass");
+  else wifiPreferences.putString("pass", wifi.passphrase.c_str());
+  savedWifi = wifi;
+  hasSavedWifi = true;
+}
+
+void forgetSavedWifi() {
+  wifiPreferences.remove("ssid");
+  wifiPreferences.remove("pass");
+  savedWifi = {};
+  hasSavedWifi = false;
+}
 
 bool hasWord(const Keyboard_Class::KeysState& keys, char first,
              char second = '\0') {
@@ -354,12 +404,12 @@ void beginWifiAttempt(const orca::WifiConfig& wifi, WifiAttempt attempt) {
 }
 
 void beginStoredWifi() {
-  if (!configManager.active().hasWifi || storedWifiRetry.paused()) return;
-  beginWifiAttempt(configManager.active().wifi, WifiAttempt::Stored);
+  if (!hasSavedWifi || storedWifiRetry.paused()) return;
+  beginWifiAttempt(savedWifi, WifiAttempt::Stored);
 }
 
 void scheduleStoredReconnect() {
-  if (!configManager.active().hasWifi) return;
+  if (!hasSavedWifi) return;
   if (storedWifiRetry.paused()) {
     setStatus("OFFLINE", "Wi-Fi reconnect paused");
     return;
@@ -423,14 +473,7 @@ void completeWifiAttempt() {
   storedWifiRetry.resume();
   wifiWasConnected = true;
   if (completed == WifiAttempt::Candidate) {
-    if (!configManager.updateWifi(candidateWifi)) {
-      WiFi.disconnect(false, false);
-      wifiWasConnected = false;
-      uiMode = UiMode::Console;
-      setStatus("ERROR", "Wi-Fi save failed; old config kept");
-      scheduleStoredReconnect();
-      return;
-    }
+    saveWifi(candidateWifi);
     candidateWifi = {};
     setStatus("ONLINE", "Wi-Fi tested and saved");
   } else {
@@ -475,7 +518,7 @@ void pollWifi() {
       scheduleStoredReconnect();
     }
     if (uiMode == UiMode::Console && storedWifiRetry.shouldAttempt(
-                                     configManager.active().hasWifi, millis(),
+                                     hasSavedWifi, millis(),
                                      nextReconnectAt)) {
       beginStoredWifi();
     }
@@ -635,21 +678,20 @@ void drawScreen() {
 }
 
 void performForget() {
-  if (!configManager.forget()) {
-    uiMode = UiMode::Console;
-    const auto& active = configManager.active();
-    setStatus("ERROR", !active.hasWifi && active.hasPairing
-                           ? "Wi-Fi forgotten; pairing remains"
-                           : "Forget failed; config remains active");
-    return;
-  }
+  forgetSavedWifi();
+  const bool pairingForgot = configManager.forget();
   stopWebSocket();
-  WiFi.disconnect(true, false);
+  WiFi.disconnect(false, false);
   wifiAttempt = WifiAttempt::None;
   storedWifiRetry.resume();
   wifiWasConnected = false;
   candidateWifi = {};
   consoleModel = orca::ConsoleModel{};
+  if (!pairingForgot) {
+    uiMode = UiMode::Console;
+    setStatus("ERROR", "Wi-Fi forgotten; pairing remains");
+    return;
+  }
   Serial.println("OK configuration forgotten");
   startWifiScan();
 }
@@ -658,7 +700,7 @@ void reportSerialStatus() {
   const auto& active = configManager.active();
   Serial.printf(
       "STATUS version=%s saved_wifi=%s wifi=%s saved_pairing=%s bridge=%s pairing_store=%s\n",
-      ORCA_BUDDY_VERSION, active.hasWifi ? "yes" : "no",
+      ORCA_BUDDY_VERSION, hasSavedWifi ? "yes" : "no",
       WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
       active.hasPairing ? "yes" : "no", webSocketConnected ? "connected" : "disconnected",
       pairingConfigStore.usingFallback() ? "fallback" : "nvs");
@@ -862,10 +904,13 @@ void setup() {
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   serialLine.reserve(1024);
+  wifiPreferences.begin("orca-buddy-wifi", false);
+  discardLegacyWifiRecords();
+  loadSavedWifi();
   configManager.load();
 
   Serial.println("Orca Cardputer Buddy ready");
-  if (configManager.active().hasWifi) {
+  if (hasSavedWifi) {
     beginStoredWifi();
   } else {
     startWifiScan();
