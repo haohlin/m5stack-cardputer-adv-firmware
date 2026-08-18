@@ -64,13 +64,14 @@ device returns `OK secure pairing saved`. It waits through a short macOS USB
 CDC re-enumeration, resynchronizes interrupted serial input, and sends paced
 frames, so reruns do not reuse a partial command. Plugin logs only safe stages
 and fixed failure reasons; it never logs pairing material or raw subprocess
-output. Firmware `0.1.7` uses Env Monitor's direct small `Preferences` Wi-Fi
-keys. It deletes obsolete combined Wi-Fi records at boot and never attempts a
-custom Wi-Fi config-blob write. Pairing remains independent.
+output. Firmware `0.1.8` uses Env Monitor's direct small `Preferences` Wi-Fi
+keys and stores pairing in bounded direct NVS chunks. It deletes obsolete
+combined records at boot and never attempts a 1,340-byte contiguous pairing
+write or shared-SPIFFS pairing fallback.
 
 **Orca Cardputer: Device Diagnostics** uses USB to display only a validated,
 fixed status line: firmware version, saved/live Wi-Fi, saved pairing, live WSS
-bridge, and `nvs`/`fallback` pairing storage. The event log holds only fixed
+bridge, and `nvs` pairing storage. The event log holds only fixed
 request/result/failure classes and rejects arbitrary serial output.
 
 Pairing requires a Cardputer USB serial device; being on Wi-Fi is not enough

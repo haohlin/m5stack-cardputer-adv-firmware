@@ -3,7 +3,7 @@
 ## v0.1 boundary
 
 `orca-buddy` is an independent app identity: `Orca Cardputer Buddy`, version
-`0.1.7`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
+`0.1.8`, and artifact prefix `Orca-Cardputer-Buddy`. It is implemented as
 independent firmware plus a local macOS bridge and MCP adapter. It does not use
 a Claude compatibility layer, characters, Claude graphics, private Orca hooks,
 terminal-content collection, or any Orca control protocol. The only automatic
@@ -49,24 +49,19 @@ Cardputer **Ctrl + [** supplies Escape because its keyboard has no physical
 Escape key. A later successful or manual connection resumes retry policy.
 
 Launcher preserves one shared NVS partition across apps. Orca Buddy writes its
-small Wi-Fi record directly in the `orca-buddy` NVS namespace. Separate pairing
-record tries NVS, then safe SPIFFS fallback only if needed. First SPIFFS use
-initializes only after reading every byte and proving shared partition erased;
-a nonblank unmountable partition is never formatted. At boot valid pairing
-fallback takes precedence only for pairing; it never changes Wi-Fi source.
-Replacement uses staged/current/previous files so failed pairing update retains
-valid pairing. On-device **Forget** clears both independent records; unused
-pairing fallback cannot block Wi-Fi save. If pairing erase fails after Wi-Fi
-erase, the device reports the partial result and never represents that Wi-Fi
-as still active. Version `0.1.7` deletes earlier combined Wi-Fi development
-records and uses only Env Monitor-style string keys, so operator saves Wi-Fi
-and performs USB pairing once after upgrade. This storage split is reliability policy for
+small Wi-Fi record directly in one namespace. Pairing uses a distinct namespace
+and fixed 192-byte NVS chunks, committing total length only after all chunks
+write. This avoids the rejected 1,340-byte contiguous NVS blob. A reset during
+pair update invalidates pairing rather than loading mixed chunks. On-device
+**Forget** clears both independent records. Version `0.1.8` deletes earlier
+combined Wi-Fi/pairing development records, so operator saves Wi-Fi and
+performs USB pairing once after upgrade. This storage split is reliability policy for
 Launcher-shared storage, not new network, desktop, or export surface; bearer,
 CA, and Wi-Fi credentials remain hidden from display/logs.
 
 USB `status` is a diagnostic-only command with one exact allowed result:
 firmware version; saved/live Wi-Fi; saved pairing; live WSS bridge; and pairing
-storage (`nvs` or `fallback`). The supplied host helper and desktop plugin
+storage (`nvs`). The supplied host helper and desktop plugin
 validate that entire shape before presenting it or writing a fixed event class.
 An SSID, passphrase, bearer, CA, endpoint, raw serial line, or arbitrary device
 content is never presented or logged.

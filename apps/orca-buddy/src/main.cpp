@@ -109,6 +109,102 @@ class VolatileConfigStore final : public orca::ConfigStore {
   bool erase() override { return true; }
 };
 
+class ChunkedPreferencesConfigStore final : public orca::ConfigStore {
+ public:
+  bool read(std::vector<std::uint8_t>& output) override {
+    Preferences preferences;
+    if (!preferences.begin("orca-pair", true)) return false;
+    const std::size_t length = preferences.getUInt("length", 0);
+    if (length == 0 || length > kMaximumSerialCommandBytes) {
+      preferences.end();
+      return false;
+    }
+
+    output.resize(length);
+    std::size_t offset = 0;
+    for (std::size_t index = 0; offset < length; ++index) {
+      if (index == kMaximumChunks) {
+        output.clear();
+        preferences.end();
+        return false;
+      }
+      const std::size_t count = std::min(kChunkBytes, length - offset);
+      const String key = chunkKey(index);
+      if (preferences.getBytesLength(key.c_str()) != count ||
+          preferences.getBytes(key.c_str(), output.data() + offset, count) != count) {
+        output.clear();
+        preferences.end();
+        return false;
+      }
+      offset += count;
+    }
+    preferences.end();
+    return true;
+  }
+
+  bool write(const std::vector<std::uint8_t>& input) override {
+    lastFailure_ = "unknown";
+    if (input.empty() || input.size() > kMaximumSerialCommandBytes) {
+      lastFailure_ = "size";
+      return false;
+    }
+    Preferences preferences;
+    if (!preferences.begin("orca-pair", false)) {
+      lastFailure_ = "open";
+      return false;
+    }
+
+    // Invalidate first. A reset during an update fails closed instead of
+    // loading a mix of old and new pairing chunks.
+    preferences.remove("length");
+    std::size_t offset = 0;
+    std::size_t index = 0;
+    for (; offset < input.size(); ++index) {
+      const std::size_t count = std::min(kChunkBytes, input.size() - offset);
+      const String key = chunkKey(index);
+      if (preferences.putBytes(key.c_str(), input.data() + offset, count) != count) {
+        preferences.end();
+        lastFailure_ = "chunk";
+        return false;
+      }
+      offset += count;
+    }
+    for (; index < kMaximumChunks; ++index) preferences.remove(chunkKey(index).c_str());
+    const bool committed =
+        preferences.putUInt("length", static_cast<std::uint32_t>(input.size())) == sizeof(std::uint32_t);
+    preferences.end();
+    lastFailure_ = committed ? "none" : "commit";
+    return committed;
+  }
+
+  bool erase() override {
+    Preferences preferences;
+    if (!preferences.begin("orca-pair", false)) return false;
+    bool removed = !preferences.isKey("length") || preferences.remove("length");
+    for (std::size_t index = 0; index < kMaximumChunks; ++index) {
+      const String key = chunkKey(index);
+      if (preferences.isKey(key.c_str()) && !preferences.remove(key.c_str())) removed = false;
+    }
+    preferences.end();
+    return removed;
+  }
+
+  const char* lastFailure() const { return lastFailure_; }
+
+ private:
+  static constexpr std::size_t kChunkBytes = 192;
+  static constexpr std::size_t kMaximumChunks =
+      (kMaximumSerialCommandBytes + kChunkBytes - 1) / kChunkBytes;
+
+  static String chunkKey(std::size_t index) {
+    char key[5]{};
+    snprintf(key, sizeof(key), "p%02u", static_cast<unsigned>(index));
+    return String(key);
+  }
+
+  const char* lastFailure_ = "none";
+};
+
 class SpiffsConfigStore final : public orca::ConfigStore {
  public:
   bool read(std::vector<std::uint8_t>& output) override {
@@ -198,9 +294,7 @@ enum class WifiAttempt { None, Stored, Candidate };
 // not encoded into Orca Buddy's pairing record or a custom blob.
 Preferences wifiPreferences;
 VolatileConfigStore unusedWifiConfigStore;
-PreferencesConfigStore pairingPreferencesStore("pair");
-SpiffsConfigStore spiffsConfigStore;
-orca::FallbackConfigStore pairingConfigStore(pairingPreferencesStore, spiffsConfigStore);
+ChunkedPreferencesConfigStore pairingConfigStore;
 orca::ConfigManager configManager(unusedWifiConfigStore, pairingConfigStore);
 orca::ConsoleModel consoleModel;
 orca::ReconnectBackoff reconnectBackoff;
@@ -227,13 +321,14 @@ std::string authorizationHeader;
 std::string serialLine;
 bool serialOverflow = false;
 
-void discardLegacyWifiRecords() {
-  // Older development builds stored Wi-Fi in these records. They are not read
-  // by this direct Preferences path and can otherwise consume shared NVS room.
+void discardLegacyRecords() {
+  // Earlier development builds stored Wi-Fi/pairing as large blobs. This app
+  // now uses direct Wi-Fi strings and bounded pairing chunks instead.
   Preferences legacy;
   if (!legacy.begin("orca-buddy", false)) return;
   legacy.remove("wifi");
   legacy.remove("config");
+  legacy.remove("pair");
   legacy.end();
 }
 
@@ -703,7 +798,7 @@ void reportSerialStatus() {
       ORCA_BUDDY_VERSION, hasSavedWifi ? "yes" : "no",
       WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
       active.hasPairing ? "yes" : "no", webSocketConnected ? "connected" : "disconnected",
-      pairingConfigStore.usingFallback() ? "fallback" : "nvs");
+      "nvs");
 }
 
 void handleSerialCommand(const std::string& command) {
@@ -714,14 +809,12 @@ void handleSerialCommand(const std::string& command) {
   orca::PairingConfig pairing;
   if (orca::parseProvisioningCommand(command, pairing)) {
     if (!configManager.updatePairing(pairing)) {
-      Serial.println("ERR pairing persist failed; active config unchanged");
+      Serial.printf("ERR pairing persist failed; active config unchanged; storage=%s\n",
+                    pairingConfigStore.lastFailure());
       setStatus("ERROR", "Pairing save failed");
       return;
     }
     stopWebSocket();
-    if (pairingConfigStore.usingFallback()) {
-      Serial.println("INFO pairing configuration saved in local fallback storage");
-    }
     Serial.println("OK secure pairing saved");
     setStatus("PAIR", "Secure pairing saved");
     startWebSocket();
@@ -905,7 +998,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   serialLine.reserve(1024);
   wifiPreferences.begin("orca-buddy-wifi", false);
-  discardLegacyWifiRecords();
+  discardLegacyRecords();
   loadSavedWifi();
   configManager.load();
 

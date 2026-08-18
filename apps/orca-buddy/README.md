@@ -1,6 +1,6 @@
 # Orca Cardputer Buddy
 
-Independent Orca Cardputer app contract, version `0.1.7`. Firmware header
+Independent Orca Cardputer app contract, version `0.1.8`. Firmware header
 shows this version on device and release checks keep it equal to bridge/plugin
 metadata.
 
@@ -46,10 +46,11 @@ contents are never shown. Normal workflow has no direct-flash helper.
 
 Wi-Fi now uses Env Monitor's direct `Preferences` pattern: one open handle,
 small `ssid` and `pass` string keys, and direct station association. Version
-`0.1.7` discards obsolete Orca Buddy combined Wi-Fi records at boot, then saves
-only those direct keys. Pairing stays independent. Save Wi-Fi, then pair once
-again. USB pairing waits for a transient ESP32-S3 CDC re-enumeration before it
-sends paced frames.
+`0.1.8` also deletes obsolete one-blob pairing records, then persists pairing
+in 192-byte direct NVS chunks. This avoids the rejected 1,340-byte contiguous
+NVS write and does not use shared SPIFFS. Save Wi-Fi, then pair once again.
+USB pairing waits for a transient ESP32-S3 CDC re-enumeration before it sends
+paced frames.
 
 The USB command `status` has one fixed secret-free reply: firmware version,
 saved/live Wi-Fi, saved pairing, live WSS bridge, and pairing store. Use the
